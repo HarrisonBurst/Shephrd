@@ -26,6 +26,7 @@ type Config struct {
 	Wake                WakeConfig                 `toml:"wake" json:"wake"`
 	Notifications       NotificationConfig         `toml:"notifications" json:"notifications"`
 	PiWatcher           PiWatcherConfig            `toml:"pi_watcher" json:"pi_watcher"`
+	WakeWatch           WakeWatchConfig            `toml:"wake_watch" json:"wake_watch"`
 	Memory              MemoryConfig               `toml:"memory" json:"memory"`
 	TerminalExtensions  TerminalExtensions         `toml:"terminal_extensions,omitempty" json:"terminal_extensions,omitempty"`
 	LifecycleHandlers   LifecycleHandlers          `toml:"lifecycle_handlers,omitempty" json:"lifecycle_handlers,omitempty"`
@@ -92,6 +93,20 @@ type PiWatcherConfig struct {
 	PollMax time.Duration `toml:"poll_max" json:"poll_max"`
 }
 
+type WakeWatchConfig struct {
+	PollMin      time.Duration            `toml:"poll_min" json:"poll_min"`
+	PollMax      time.Duration            `toml:"poll_max" json:"poll_max"`
+	RenewHorizon time.Duration            `toml:"renew_horizon" json:"renew_horizon"`
+	Delivery     *DeliveryExtensionConfig `toml:"delivery,omitempty" json:"delivery,omitempty"`
+}
+
+type DeliveryExtensionConfig struct {
+	ExtensionID string   `toml:"extension_id" json:"extension_id"`
+	Command     []string `toml:"command" json:"command"`
+	SHA256      string   `toml:"sha256" json:"sha256"`
+	Environment []string `toml:"environment,omitempty" json:"environment,omitempty"`
+}
+
 func Path() (string, error) {
 	if path := os.Getenv("SHEPHRD_CONFIG"); path != "" {
 		return expand(path)
@@ -129,6 +144,9 @@ func Load() (Config, error) {
 		}
 		if !metadata.IsDefined("pi_watcher", "poll_max") {
 			cfg.PiWatcher.PollMax = max(cfg.PiWatcher.PollMin, cfg.PiWatcher.PollMax)
+		}
+		if !metadata.IsDefined("wake_watch", "poll_max") {
+			cfg.WakeWatch.PollMax = max(cfg.WakeWatch.PollMin, cfg.WakeWatch.PollMax)
 		}
 		if undecoded := metadata.Undecoded(); len(undecoded) > 0 {
 			if undecoded[0].String() == "worktree_backend" {
@@ -197,6 +215,9 @@ func Load() (Config, error) {
 	if err := validateNotificationConfig(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := validateWakeWatch(&cfg.WakeWatch); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -259,6 +280,7 @@ func defaults() (Config, error) {
 			ClaimTTLMin: 30 * time.Second, ClaimTTLMax: 30 * time.Minute, DriverID: "driver:" + uuid.NewString()},
 		Notifications: NotificationConfig{Enabled: false, Details: false, TaskPerMinute: 2, GlobalPerMinute: 10},
 		PiWatcher:     PiWatcherConfig{Enabled: false, PollMin: time.Second, PollMax: time.Second},
+		WakeWatch:     WakeWatchConfig{PollMin: 2 * time.Second, PollMax: 30 * time.Second, RenewHorizon: 30 * time.Minute},
 	}, nil
 }
 
@@ -309,16 +331,42 @@ func validateReportAcceptedHandlers(handlers []ReportAcceptedHandler) error {
 		if err := validateExtensionTrust(&handler.Command, handler.SHA256); err != nil {
 			return fmt.Errorf("handler %s: %w", handler.Name, err)
 		}
-		if len(handler.Environment) > 16 {
-			return fmt.Errorf("handler %s may allow at most 16 environment variables", handler.Name)
+		if err := validateEnvironmentAllowlist(handler.Environment); err != nil {
+			return fmt.Errorf("handler %s %w", handler.Name, err)
 		}
-		environment := make(map[string]bool, len(handler.Environment))
-		for _, name := range handler.Environment {
-			if !validEnvironmentName(name) || strings.HasPrefix(name, "SHEPHRD_") || strings.HasPrefix(name, "LD_") || strings.HasPrefix(name, "DYLD_") || environment[name] {
-				return fmt.Errorf("handler %s has an invalid or duplicate environment variable", handler.Name)
-			}
-			environment[name] = true
+	}
+	return nil
+}
+
+func validateEnvironmentAllowlist(names []string) error {
+	if len(names) > 16 {
+		return fmt.Errorf("may allow at most 16 environment variables")
+	}
+	environment := make(map[string]bool, len(names))
+	for _, name := range names {
+		if !validEnvironmentName(name) || strings.HasPrefix(name, "SHEPHRD_") || strings.HasPrefix(name, "LD_") || strings.HasPrefix(name, "DYLD_") || environment[name] {
+			return fmt.Errorf("has an invalid or duplicate environment variable")
 		}
+		environment[name] = true
+	}
+	return nil
+}
+
+func validateWakeWatch(watch *WakeWatchConfig) error {
+	if watch.PollMin <= 0 || watch.PollMax < watch.PollMin || watch.RenewHorizon <= 0 || watch.RenewHorizon > 24*time.Hour {
+		return fmt.Errorf("wake_watch poll bounds or renew_horizon are invalid")
+	}
+	if watch.Delivery == nil {
+		return nil
+	}
+	if !validExtensionIdentity(watch.Delivery.ExtensionID) {
+		return fmt.Errorf("wake_watch.delivery has an invalid extension_id")
+	}
+	if err := validateExtensionTrust(&watch.Delivery.Command, watch.Delivery.SHA256); err != nil {
+		return fmt.Errorf("wake_watch.delivery: %w", err)
+	}
+	if err := validateEnvironmentAllowlist(watch.Delivery.Environment); err != nil {
+		return fmt.Errorf("wake_watch.delivery %w", err)
 	}
 	return nil
 }

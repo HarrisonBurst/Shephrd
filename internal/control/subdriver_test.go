@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"shephrd/internal/brief"
 	"shephrd/internal/config"
 	"shephrd/internal/model"
+	"shephrd/internal/process"
 	"shephrd/internal/store"
 	"shephrd/internal/terminal"
 )
@@ -154,6 +156,46 @@ func TestSubdriverRecoveryHoldsUnknownAndLiveProcesses(t *testing.T) {
 	if err = state.CheckSubdriverFence(f); err == nil {
 		t.Fatal("old generation still has authority")
 	}
+}
+
+func TestSubdriverHeadlessLaunchReapsExitedRunnerInLongLivedParent(t *testing.T) {
+	root := t.TempDir()
+	state, err := store.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	request, err := state.HandoffSubdriver("", "Explicit research", "driver:main", "research", "question", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(root, "bin")
+	if err = os.MkdirAll(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	runner := filepath.Join(root, "runner.pid")
+	if err = os.WriteFile(filepath.Join(bin, "shephrd"), []byte("#!/bin/sh\necho $$ > "+runner+".tmp && mv "+runner+".tmp "+runner+"\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHEPHRD_EXECUTABLE", filepath.Join(bin, "shephrd"))
+	t.Setenv("SHEPHRD_CONFIG", filepath.Join(root, "config.toml"))
+	t.Setenv("SHEPHRD_WORKER_RUNTIME", "")
+	service := New(config.Config{DefaultHarness: "pi", WorkerRuntime: "headless", DataDir: root}, state)
+	c, err := service.ResumeSubdriver(request.SubdriverID, false)
+	if err != nil || c.State != "starting" {
+		t.Fatalf("headless launch = %+v %v", c, err)
+	}
+	pid := 0
+	waitFor(t, func() bool {
+		body, err := os.ReadFile(runner)
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(body)))
+		return err == nil && pid > 0
+	})
+	waitFor(t, func() bool { return !process.Alive(pid) })
 }
 
 func TestSubdriverPumpLaunchTimeoutUsesCurrentObservation(t *testing.T) {

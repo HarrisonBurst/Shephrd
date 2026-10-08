@@ -314,7 +314,7 @@ func subdriverCommandFence(app *application, cmd *cobra.Command, args []string) 
 	if err != nil {
 		return err
 	}
-	if os.Getenv("SHEPHRD_WORKER") == "1" && (strings.HasPrefix(path, "subdriver ") || path == "wake pump") {
+	if os.Getenv("SHEPHRD_WORKER") == "1" && (strings.HasPrefix(path, "subdriver ") || path == "wake pump" || path == "wake watch") {
 		return fmt.Errorf("ordinary workers cannot coordinate or create supervisors")
 	}
 	if f.ID == "" {

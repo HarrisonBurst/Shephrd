@@ -7,12 +7,14 @@ build:
 	go build -o bin/shephrd-notification-macos.tmp ./cmd/shephrd-notification-macos
 	go build -o bin/shephrd-repository-scanner.tmp ./cmd/shephrd-repository-scanner
 	go build -o bin/shephrd-github-observer.tmp ./cmd/shephrd-github-observer
+	go build -o bin/shephrd-delivery-webhook.tmp ./cmd/shephrd-delivery-webhook
 	mv bin/shephrd.tmp bin/shephrd
 	mv bin/shephrd-terminal-herdr.tmp bin/shephrd-terminal-herdr
 	mv bin/shephrd-terminal-cmux.tmp bin/shephrd-terminal-cmux
 	mv bin/shephrd-notification-macos.tmp bin/shephrd-notification-macos
 	mv bin/shephrd-repository-scanner.tmp bin/shephrd-repository-scanner
 	mv bin/shephrd-github-observer.tmp bin/shephrd-github-observer
+	mv bin/shephrd-delivery-webhook.tmp bin/shephrd-delivery-webhook
 
 build-clean:
 	scripts/build-clean.sh cli
@@ -31,7 +33,7 @@ test-docs:
 	go test ./internal/cli -run '^TestDocumentation$$' -count=1
 
 test-extension:
-	go test ./internal/extension ./internal/notification/... ./internal/repository/discovery ./internal/repository/scanner ./internal/forge/github ./internal/terminal
+	go test ./internal/extension ./internal/driverdelivery/... ./internal/notification/... ./internal/repository/discovery ./internal/repository/scanner ./internal/forge/github ./internal/terminal
 	node --test tests/pi/shephrd-wake.test.ts internal/pibridge/shephrd-herdr-bridge.test.mjs
 
 test-github-e2e:
@@ -48,4 +50,4 @@ test-notification-macos-live:
 	SHEPHRD_REAL_MACOS_NOTIFICATION_E2E=1 go test ./internal/notification/macos -run '^TestLiveMacOSNotificationIsOptIn$$' -count=1 -v
 
 install:
-	go install ./cmd/shephrd ./cmd/shephrd-terminal-herdr ./cmd/shephrd-terminal-cmux ./cmd/shephrd-notification-macos ./cmd/shephrd-repository-scanner ./cmd/shephrd-github-observer
+	go install ./cmd/shephrd ./cmd/shephrd-terminal-herdr ./cmd/shephrd-terminal-cmux ./cmd/shephrd-notification-macos ./cmd/shephrd-repository-scanner ./cmd/shephrd-github-observer ./cmd/shephrd-delivery-webhook

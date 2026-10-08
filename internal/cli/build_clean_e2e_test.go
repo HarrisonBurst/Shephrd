@@ -14,7 +14,7 @@ func TestBuildCleanAllRepinE2E(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "repo")
 	home := filepath.Join(dir, "home")
-	commands := strings.Fields("shephrd shephrd-terminal-herdr shephrd-terminal-cmux shephrd-notification-macos shephrd-repository-scanner shephrd-github-observer")
+	commands := strings.Fields("shephrd shephrd-terminal-herdr shephrd-terminal-cmux shephrd-notification-macos shephrd-repository-scanner shephrd-github-observer shephrd-delivery-webhook")
 	for _, path := range []string{"Makefile", "scripts/build-clean.sh"} {
 		writeContextFixtureFile(t, root, path, readFile(t, filepath.Join("..", "..", path)))
 	}

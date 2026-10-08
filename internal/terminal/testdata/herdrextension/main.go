@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	extensionhost "shephrd/internal/extension"
@@ -35,6 +36,13 @@ func main() {
 	}
 	log(request.Operation)
 	if request.Operation == "inspect" || request.Operation == "process_info" {
+		if delay, err := os.ReadFile(os.Args[1] + ".delay"); err == nil {
+			duration, err := time.ParseDuration(strings.TrimSpace(string(delay)))
+			if err != nil {
+				os.Exit(10)
+			}
+			time.Sleep(duration)
+		}
 		if _, err := os.Stat(os.Args[1] + ".absent"); err == nil {
 			write(extensionhost.Response{Wire: request.Wire, RequestID: request.RequestID, Capability: request.Capability, CapabilityVersion: request.CapabilityVersion, Operation: request.Operation, Status: "error", Error: &extensionhost.Failure{Class: terminal.ErrorEndpointAbsent, Code: "endpoint_absent", Message: "fixture endpoint absent", Effect: "none"}, Extension: terminal.HerdrExtensionManifest().Extension})
 			return

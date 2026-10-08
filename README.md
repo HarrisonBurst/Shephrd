@@ -26,12 +26,12 @@ make build
 ./bin/shephrd --help
 ```
 
-This also builds `bin/shephrd-terminal-herdr`, `bin/shephrd-terminal-cmux`, the opt-in `bin/shephrd-notification-macos` notification presentation extension, the opt-in `bin/shephrd-repository-scanner` repository-discovery extension, and the opt-in `bin/shephrd-github-observer` GitHub observation extension. Headless execution is the default and does not launch terminal or notification extensions; discovery, GitHub observation, notifications, Herdr, and cmux are enabled only by their explicit pinned configuration.
+This also builds `bin/shephrd-terminal-herdr`, `bin/shephrd-terminal-cmux`, the opt-in `bin/shephrd-notification-macos` notification presentation extension, the opt-in `bin/shephrd-repository-scanner` repository-discovery extension, the opt-in `bin/shephrd-github-observer` GitHub observation extension, and the opt-in `bin/shephrd-delivery-webhook` signed-webhook delivery extension for `shephrd wake watch`. Headless execution is the default and does not launch terminal, notification, or delivery extensions; discovery, GitHub observation, notifications, watcher delivery, Herdr, and cmux are enabled only by their explicit pinned configuration.
 
 Or install through Go:
 
 ```sh
-go install ./cmd/shephrd ./cmd/shephrd-terminal-herdr ./cmd/shephrd-terminal-cmux ./cmd/shephrd-notification-macos ./cmd/shephrd-repository-scanner ./cmd/shephrd-github-observer
+go install ./cmd/shephrd ./cmd/shephrd-terminal-herdr ./cmd/shephrd-terminal-cmux ./cmd/shephrd-notification-macos ./cmd/shephrd-repository-scanner ./cmd/shephrd-github-observer ./cmd/shephrd-delivery-webhook
 ```
 
 A build run directly in a working tree that has uncommitted changes embeds a dirty VCS stamp, so the executable identifies itself as `<commit>+dirty` and cannot be traced to a committed revision. `make build-clean` and `make build-clean-all` clone the current commit into a temporary directory, build there, verify each stamp names that exact revision without a dirty marker, and only then install into `bin/`. The `cli` target installs `bin/shephrd` alone, which is the ordinary case when the deployed control plane must track a commit without disturbing anything else.

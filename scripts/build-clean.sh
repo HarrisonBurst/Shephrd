@@ -3,7 +3,7 @@ set -euo pipefail
 
 case "${1:-}" in
   cli) commands=(shephrd) ;;
-  all) commands=(shephrd shephrd-terminal-herdr shephrd-terminal-cmux shephrd-notification-macos shephrd-repository-scanner shephrd-github-observer) ;;
+  all) commands=(shephrd shephrd-terminal-herdr shephrd-terminal-cmux shephrd-notification-macos shephrd-repository-scanner shephrd-github-observer shephrd-delivery-webhook) ;;
   *) echo "usage: $0 [cli|all]" >&2; exit 2 ;;
 esac
 

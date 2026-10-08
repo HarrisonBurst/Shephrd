@@ -249,6 +249,14 @@ func (s *Store) AdoptTask(taskID, currentDriverID, newDriverID string) (model.Ta
 }
 
 func (s *Store) DrainNotifications(taskID, consumerID, driverGeneration string, limit int, requestedTTL ...time.Duration) (model.NotificationDrain, error) {
+	return s.drainNotifications(taskID, consumerID, driverGeneration, limit, false, requestedTTL...)
+}
+
+func (s *Store) DrainNotificationExclusive(consumerID, driverGeneration string, ttl time.Duration) (model.NotificationDrain, error) {
+	return s.drainNotifications("", consumerID, driverGeneration, 1, true, ttl)
+}
+
+func (s *Store) drainNotifications(taskID, consumerID, driverGeneration string, limit int, ownerExclusive bool, requestedTTL ...time.Duration) (model.NotificationDrain, error) {
 	result := model.NotificationDrain{Notifications: make([]model.DriverNotification, 0), ConsumerID: consumerID, DriverGeneration: driverGeneration}
 	if err := validateConsumer(consumerID, driverGeneration); err != nil {
 		return result, err
@@ -283,6 +291,15 @@ func (s *Store) DrainNotifications(taskID, consumerID, driverGeneration string, 
 	result.Superseded, err = supersedeStaleNotificationsTx(tx, nowStamp)
 	if err != nil {
 		return result, err
+	}
+	if ownerExclusive {
+		var claimed int
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM driver_notifications WHERE target_driver_id=? AND state='claimed' AND claim_until>?)`, consumerID, nowStamp).Scan(&claimed); err != nil {
+			return result, err
+		}
+		if claimed != 0 {
+			return result, tx.Commit()
+		}
 	}
 
 	query := notificationSelect + ` WHERE d.state='pending' AND d.target_driver_id=? AND ` + reportDoneNotificationPresentable

@@ -52,7 +52,7 @@ The boundaries are deliberate: task readiness does not spawn; `done` does not pr
 ### Coordination and handoff
 
 - [Opt-in repository sub-drivers](components/subdrivers.md) separates durable scoped supervision from bounded harness sessions, with original-request routing, correlated returns, general research and explicit restart recovery.
-- [Notifications and watcher delivery](components/notifications-watchers.md) covers owner-routed notifications, claim leases, the Pi watcher, bounded manual drains, desktop hints, and the obligations projection.
+- [Notifications and watcher delivery](components/notifications-watchers.md) covers owner-routed notifications, claim leases, the Pi watcher, the driver-agnostic `wake watch` and its `driver.delivery` extension, bounded manual drains, desktop hints, and the obligations projection.
 - [Plans and evidence handoff](components/plan-evidence.md) covers persistent planning, prerequisites, report-input selection, readiness, dispatch, and immutable successor inputs.
 - [Ownership, adoption, and annotations](components/ownership-annotations.md) separates cooperative owner identity, explicit transfer, revision-fenced annotation history, and replacement-driver recovery.
 - [Optional review feedback](components/review-feedback.md) explains the ordinary task and report mechanics available when a user or repository requests review.
