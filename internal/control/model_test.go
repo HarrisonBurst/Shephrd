@@ -14,12 +14,13 @@ import (
 func installFakeHarnesses(t *testing.T, executables ...string) {
 	t.Helper()
 	binDir := t.TempDir()
-	for _, executable := range executables {
+	for _, executable := range append(executables, "shephrd") {
 		if err := os.WriteFile(filepath.Join(binDir, executable), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SHEPHRD_EXECUTABLE", filepath.Join(binDir, "shephrd"))
 }
 
 func installFakePi(t *testing.T) {
@@ -236,6 +237,9 @@ func TestInitialSpawnPersistsResolvedDriverSelection(t *testing.T) {
 	}
 	if stored.Harness != result.Attempt.Harness || stored.Model != result.Attempt.Model {
 		t.Fatalf("stored selection = %q/%q", stored.Harness, stored.Model)
+	}
+	if stored.RuntimeExecutable != os.Getenv("SHEPHRD_EXECUTABLE") {
+		t.Fatalf("runtime executable = %q", stored.RuntimeExecutable)
 	}
 	reapRunner(t, result.Attempt.RunnerPID)
 }
