@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -352,6 +353,74 @@ func TestWatcherRenewsBeforeExpiryThenStopsAtHorizonAndRedelivers(t *testing.T) 
 	}
 }
 
+func TestWatcherRenewsBeforeExpiryWhenPollMinExceedsTheRenewalInterval(t *testing.T) {
+	f := newFixture(t)
+	id := f.subdriverReturn("question")
+	r := &recorder{}
+	watcher := Watcher{Store: f.state, Activation: r, Deliverer: r, DriverID: owner, Generation: "watch:slow-poll",
+		ClaimTTL: store.MinNotificationClaimTTL, PollMin: time.Minute, PollMax: time.Minute, RenewHorizon: time.Hour,
+		DeliveryTimeout: time.Second, Log: r.log}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		watcher.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	eventually(t, "first delivery", func() bool { return len(r.delivered()) == 1 })
+	original := r.delivered()[0].Claim
+	deadline := original.ClaimUntil.Add(-5 * time.Second)
+	for r.eventCount("renewed") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no renewal before the lease neared expiry: events %+v", r.events)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if renewed := f.notification(id); renewed.State != model.NotificationClaimed || renewed.ClaimToken != original.ClaimToken || renewed.ClaimUntil == nil || !renewed.ClaimUntil.After(original.ClaimUntil) {
+		t.Fatalf("renewed claim = %+v", renewed)
+	}
+	if len(r.delivered()) != 1 || r.eventCount("expired") != 0 {
+		t.Fatalf("claim was redelivered instead of renewed: deliveries %d, events %+v", len(r.delivered()), r.events)
+	}
+}
+
+func TestWatcherWithholdsDeliveryWhenRenewalFails(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		fault func(*fixture, string)
+	}{
+		{name: "conflict", fault: func(f *fixture, id string) {
+			f.exec(`UPDATE driver_notifications SET target_driver_id='driver:adopter' WHERE notification_id=?`, id)
+		}},
+		{name: "error", fault: func(f *fixture, _ string) {
+			f.exec(`CREATE TRIGGER renewal_fault BEFORE UPDATE OF claim_until ON driver_notifications BEGIN SELECT RAISE(ABORT, 'fixture renewal fault'); END`)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t)
+			id := f.subdriverReturn("question")
+			r := &recorder{outcomes: []func() (driverdelivery.Result, error){
+				func() (driverdelivery.Result, error) {
+					time.Sleep(1100 * time.Millisecond)
+					f.exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, time.Now().UTC().Add(600*time.Millisecond).Format(time.RFC3339Nano), id)
+					test.fault(f, id)
+					return driverdelivery.Result{Outcome: driverdelivery.OutcomeRetryable, Detail: "HTTP 503"}, nil
+				},
+			}}
+			start(t, f, r, r, time.Hour)
+			eventually(t, "failed renewal", func() bool { return r.eventCount("renew_failed") >= 1 })
+			_, pumps := r.counts()
+			eventually(t, "expiry observed from stored state", func() bool { return r.eventCount("expired") == 1 })
+			if _, current := r.counts(); len(r.delivered()) != 1 || r.eventCount("renewed") != 0 || current <= pumps {
+				t.Fatalf("delivered after a failed renewal: deliveries %d, pumps %d -> %d, events %+v", len(r.delivered()), pumps, current, r.events)
+			}
+		})
+	}
+}
+
 func TestWatcherHoldsUnobservableClaimWithoutRenewingOrDelivering(t *testing.T) {
 	f := newFixture(t)
 	id := f.subdriverReturn("question")
@@ -416,6 +485,26 @@ func TestWatcherRetriesExtensionTimeoutAndCrash(t *testing.T) {
 				t.Fatalf("notification = %+v", notice)
 			}
 		})
+	}
+}
+
+func TestGuardSkipsOwnersNoWatcherServes(t *testing.T) {
+	dataDir := t.TempDir()
+	for _, ineligible := range []string{"driver:pi:session", "coordinator:subdriver_1", "subdriver:subdriver_1"} {
+		release, err := Guard(dataDir, ineligible)
+		if err != nil {
+			t.Fatalf("%s: %v", ineligible, err)
+		}
+		release()
+		if Eligible(ineligible) {
+			t.Fatalf("%s is eligible for a watcher", ineligible)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "watch")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("guard created watcher lock state for ineligible owners: %v", err)
+	}
+	if !Eligible(owner) {
+		t.Fatalf("%s is not eligible for a watcher", owner)
 	}
 }
 

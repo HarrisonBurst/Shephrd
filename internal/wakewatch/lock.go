@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -71,6 +72,9 @@ func (l *Lock) Close() error {
 // owner. The shared lock is held until release so a watcher cannot start
 // mid-command.
 func Guard(dataDir, owner string) (func(), error) {
+	if !Eligible(owner) {
+		return func() {}, nil
+	}
 	file, err := openLock(dataDir, owner)
 	if err != nil {
 		return nil, err
@@ -84,6 +88,11 @@ func Guard(dataDir, owner string) (func(), error) {
 		return nil, fmt.Errorf("check watcher lock: %w", err)
 	}
 	return func() { file.Close() }, nil
+}
+
+func Eligible(owner string) bool {
+	owner = strings.TrimSpace(owner)
+	return !strings.HasPrefix(owner, "driver:pi:") && !model.IsSubdriverOwner(owner)
 }
 
 func openLock(dataDir, owner string) (*os.File, error) {

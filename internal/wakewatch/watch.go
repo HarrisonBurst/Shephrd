@@ -83,7 +83,7 @@ func (w *Watcher) Run(ctx context.Context) {
 			current = nil
 			continue
 		}
-		if !sleep(ctx, w.PollMin) {
+		if !sleep(ctx, w.claimDelay(current)) {
 			break
 		}
 	}
@@ -131,7 +131,8 @@ func (w *Watcher) tick(ctx context.Context, current *claim) bool {
 		current.horizon = true
 		w.log(Event{Event: "horizon", NotificationID: current.notification.NotificationID, Detail: "renewal stopped; the claim expires and is redelivered under a new claim"})
 	}
-	if !current.horizon && !now.Before(current.renewedAt.Add(RenewalInterval(current.renewedAt, current.claimUntil))) {
+	deliver := !current.finished && !current.horizon && !now.Before(current.nextDelivery)
+	if !current.horizon && !now.Before(current.renewalDue()) {
 		request := model.NotificationRenewRequest{NotificationID: current.notification.NotificationID, ClaimToken: current.notification.ClaimToken, ConsumerID: w.DriverID, DriverGeneration: w.Generation}
 		renewed, err := w.Store.RenewNotification(request, w.ClaimTTL)
 		switch {
@@ -144,15 +145,27 @@ func (w *Watcher) tick(ctx context.Context, current *claim) bool {
 			return false
 		default:
 			w.log(Event{Event: "renew_failed", NotificationID: current.notification.NotificationID, Detail: err.Error()})
+			deliver = false
 		}
 	}
-	if !current.finished && !current.horizon && !now.Before(current.nextDelivery) {
+	if deliver {
 		w.deliver(ctx, current)
 	}
 	if err := w.Activation.PumpSubdrivers(w.DriverID); err != nil {
 		w.log(Event{Event: "pump_failed", Detail: err.Error()})
 	}
 	return true
+}
+
+func (c *claim) renewalDue() time.Time {
+	return c.renewedAt.Add(RenewalInterval(c.renewedAt, c.claimUntil))
+}
+
+func (w *Watcher) claimDelay(current *claim) time.Duration {
+	if current.horizon {
+		return w.PollMin
+	}
+	return min(w.PollMin, max(time.Until(current.renewalDue()), time.Second))
 }
 
 func settlement(stored model.DriverNotification, current *claim, now time.Time) (string, string) {

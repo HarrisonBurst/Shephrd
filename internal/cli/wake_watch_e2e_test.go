@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	extensionhost "shephrd/internal/extension"
 	"shephrd/internal/model"
 	"shephrd/internal/store"
+	"shephrd/internal/wakewatch"
 )
 
 type webhookDelivery struct {
@@ -211,6 +213,19 @@ func TestWakeWatchBuiltCLIDeliversSignedClaimsWithOwnerExclusivity(t *testing.T)
 			t.Fatalf("refused watcher touched %s: %+v %v", id, notice, err)
 		}
 	}
+	pi := map[string]string{"PI_SESSION_ID": "session"}
+	for _, args := range [][]string{{"wake", "drain", "--json"}, {"wake", "pump", "--json"}} {
+		if _, diagnostic, err := run(pi, args...); err != nil {
+			t.Fatalf("Pi %v: %v %+v", args, err, diagnostic)
+		}
+	}
+	refuse("", session, "wake", "drain")
+	refuse("", session, "wake", "pump")
+	for _, ineligible := range []string{"driver:pi:session", "coordinator:" + general.SubdriverID} {
+		if _, err := os.Stat(wakewatch.LockPath(filepath.Join(root, "data"), ineligible)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("manual command created a watcher lock for %s: %v", ineligible, err)
+		}
+	}
 
 	watch := exec.Command(binary, "wake", "watch", "--driver-id", owner, "--json-log")
 	watch.Env = environment
@@ -240,6 +255,9 @@ func TestWakeWatchBuiltCLIDeliversSignedClaimsWithOwnerExclusivity(t *testing.T)
 	}
 	if _, _, err := run(nil, "wake", "drain", "--driver-id", "driver:other", "--json"); err != nil {
 		t.Fatalf("other owner drain: %v", err)
+	}
+	if _, err := os.Stat(wakewatch.LockPath(filepath.Join(root, "data"), "driver:other")); err != nil {
+		t.Fatalf("eligible owner drain did not take the watcher lock: %v", err)
 	}
 
 	repo, err := state.UpsertRepo(model.Repo{Name: "activation", Path: filepath.Join(root, "activation"), DefaultBranch: "main"})

@@ -45,7 +45,7 @@ without acknowledging or releasing claims.`,
 			if owner == "" {
 				return domain.Failure("driver_context_required", "--driver-id is required for wake watch")
 			}
-			if strings.HasPrefix(owner, "driver:pi:") || domain.IsSubdriverOwner(owner) {
+			if !wakewatch.Eligible(owner) {
 				return domain.Failure("wake_watch_owner_refused", "wake watch serves non-Pi main drivers only; %s belongs to the Pi watcher or a sub-driver", owner)
 			}
 			delivery := app.config.WakeWatch.Delivery
