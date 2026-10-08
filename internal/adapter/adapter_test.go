@@ -13,6 +13,17 @@ import (
 	"shephrd/internal/model"
 )
 
+func installHarnessFixtures(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	for _, name := range []string{"pi", "claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestRecordedContractFixtures(t *testing.T) {
 	for _, harness := range []string{"claude-code", "pi", "codex"} {
 		t.Run(harness, func(t *testing.T) {
@@ -142,6 +153,7 @@ func TestPiAssistantCompletionAuthority(t *testing.T) {
 }
 
 func TestNamedSessionsUseDisplayNameOnlyOnInitialLaunch(t *testing.T) {
+	installHarnessFixtures(t)
 	attempt := model.Attempt{SessionID: "session", WorktreePath: "/tree"}
 	initial, err := BuildNamed("pi", attempt, "prompt", false, "Shephrd: demo/feature [short]")
 	if err != nil {
@@ -161,6 +173,7 @@ func TestNamedSessionsUseDisplayNameOnlyOnInitialLaunch(t *testing.T) {
 }
 
 func TestPiInvocationDisablesDriverWatcher(t *testing.T) {
+	installHarnessFixtures(t)
 	invocation, err := BuildNamed("pi", model.Attempt{SessionID: "session", WorktreePath: "/tree"}, "prompt", false, "")
 	if err != nil {
 		t.Fatal(err)
@@ -171,6 +184,7 @@ func TestPiInvocationDisablesDriverWatcher(t *testing.T) {
 }
 
 func TestPiTerminalRuntimesUseInteractiveTUIWithExplicitBridge(t *testing.T) {
+	installHarnessFixtures(t)
 	attempt := model.Attempt{Model: "openai-codex/gpt-5.6-luna", SessionID: "session", WorktreePath: "/tree"}
 	for _, workerRuntime := range []string{"herdr", "cmux"} {
 		for _, resume := range []bool{false, true} {
@@ -201,6 +215,7 @@ func TestPiTerminalRuntimesUseInteractiveTUIWithExplicitBridge(t *testing.T) {
 }
 
 func TestHeadlessAndCodexHerdrInvocationsRemainMachineReadable(t *testing.T) {
+	installHarnessFixtures(t)
 	attempt := model.Attempt{SessionID: "session", WorktreePath: "/tree"}
 	for _, harness := range []string{"pi", "claude-code"} {
 		headless, err := BuildNamedForRuntime(harness, attempt, "prompt", false, "name", "headless", "")
@@ -231,6 +246,7 @@ func TestHeadlessAndCodexHerdrInvocationsRemainMachineReadable(t *testing.T) {
 }
 
 func TestClaudeTerminalRuntimesUseInteractiveTUIWithBridgeSettings(t *testing.T) {
+	installHarnessFixtures(t)
 	attempt := model.Attempt{Model: "claude-fable-5", SessionID: "session", WorktreePath: "/tree"}
 	for _, workerRuntime := range []string{"herdr", "cmux"} {
 		for _, resume := range []bool{false, true} {
@@ -261,6 +277,7 @@ func TestClaudeTerminalRuntimesUseInteractiveTUIWithBridgeSettings(t *testing.T)
 }
 
 func TestEmptyModelPreservesCodexInvocation(t *testing.T) {
+	installHarnessFixtures(t)
 	attempt := model.Attempt{SessionID: "session", WorktreePath: "/tree"}
 	initial, err := BuildNamed("codex", attempt, "prompt", false, "")
 	if err != nil {
@@ -281,6 +298,7 @@ func TestEmptyModelPreservesCodexInvocation(t *testing.T) {
 }
 
 func TestModelUsesHarnessArgvFlagForInitialAndResume(t *testing.T) {
+	installHarnessFixtures(t)
 	for _, harness := range []string{"claude-code", "pi", "codex"} {
 		t.Run(harness, func(t *testing.T) {
 			attempt := model.Attempt{Model: "Luna/Sol $opaque", SessionID: "session", WorktreePath: "/tree"}

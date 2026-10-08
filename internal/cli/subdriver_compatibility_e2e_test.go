@@ -81,7 +81,13 @@ func TestSubdriverCompatibilityCLIEndToEnd(t *testing.T) {
 		t.Fatalf("drain: %+v %v", drain, err)
 	}
 	n := drain.Notifications[0]
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(bin, "claude"), "#!/bin/sh\nexit 0\n")
 	environment := compoundCLIEnvironment(os.Environ(), map[string]string{
+		"PATH":           bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"SHEPHRD_CONFIG": cfg, "SHEPHRD_WORKER": "", "PI_SESSION_ID": "",
 		"SHEPHRD_SUBDRIVER_ID": "", "SHEPHRD_SUBDRIVER_GENERATION": "", "SHEPHRD_SUBDRIVER_TOKEN": "",
 		"SHEPHRD_COORDINATOR_ID": "", "SHEPHRD_COORDINATOR_GENERATION": "", "SHEPHRD_COORDINATOR_TOKEN": "",
