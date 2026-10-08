@@ -180,6 +180,32 @@ func TestWakeWatchBuiltCLIDeliversSignedClaimsWithOwnerExclusivity(t *testing.T)
 		}
 	}
 
+	repo, err := state.UpsertRepo(model.Repo{Name: "activation", Path: filepath.Join(root, "activation"), DefaultBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	activation, err := state.HandoffSubdriver(repo.ID, "", owner, "activation", "Activation request", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activationFence, err := state.ReserveSubdriver(activation.SubdriverID, 0, "pi", "fixture", "headless")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := exec.Command("sleep", "60")
+	if err := runner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if runner.ProcessState == nil {
+			_ = runner.Process.Kill()
+			_ = runner.Wait()
+		}
+	})
+	if err := state.StartSubdriver(activationFence, runner.Process.Pid, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+
 	watch := exec.Command(binary, "wake", "watch", "--driver-id", owner, "--json-log")
 	watch.Env = environment
 	var watchLog lockedBuffer
@@ -213,25 +239,13 @@ func TestWakeWatchBuiltCLIDeliversSignedClaimsWithOwnerExclusivity(t *testing.T)
 		t.Fatalf("eligible owner drain did not take the watcher lock: %v", err)
 	}
 
-	repo, err := state.UpsertRepo(model.Repo{Name: "activation", Path: filepath.Join(root, "activation"), DefaultBranch: "main"})
-	if err != nil {
+	if live, err := state.Subdriver(activation.SubdriverID); err != nil || live.State != "running" {
+		t.Fatalf("live activation owner changed before its runner exited: %+v %v", live, err)
+	}
+	if err := runner.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	activation, err := state.HandoffSubdriver(repo.ID, "", owner, "activation", "Activation request", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dead := exec.Command("/usr/bin/true")
-	if err := dead.Run(); err != nil {
-		t.Fatal(err)
-	}
-	activationFence, err := state.ReserveSubdriver(activation.SubdriverID, 0, "pi", "fixture", "headless")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := state.StartSubdriver(activationFence, dead.Process.Pid, "fixture"); err != nil {
-		t.Fatal(err)
-	}
+	_ = runner.Wait()
 	waitFor(t, "pump-only activation pass", func() bool {
 		subdriver, err := state.Subdriver(activation.SubdriverID)
 		return err == nil && subdriver.State == "held"
@@ -586,6 +600,9 @@ func TestWakeWatchBuiltCLIKeepsClaimRenewedDuringSlowActivation(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build terminal fixture: %s %v", output, err)
 	}
+	if err := os.Chmod(terminalExtension, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	receiver := startWakeWatchReceiver(t, root)
 	database := filepath.Join(root, "state.db")
 	operations := filepath.Join(root, "operations")
@@ -751,6 +768,9 @@ func TestWakeWatchBuiltCLIStopsWithoutClaimingWhenSignalledDuringDrainActivation
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build terminal fixture: %s %v", output, err)
 	}
+	if err := os.Chmod(terminalExtension, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	receiver := startWakeWatchReceiver(t, root)
 	database := filepath.Join(root, "state.db")
 	operations := filepath.Join(root, "operations")
@@ -895,6 +915,9 @@ func TestWakeWatchBuiltCLIStopsWithoutActivatingWhenSignalledDuringRetryDelivery
 	build.Dir = "../.."
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build terminal fixture: %s %v", output, err)
+	}
+	if err := os.Chmod(terminalExtension, 0o755); err != nil {
+		t.Fatal(err)
 	}
 	receiver := startWakeWatchReceiver(t, root, http.StatusServiceUnavailable, 0)
 	database := filepath.Join(root, "state.db")
@@ -1090,6 +1113,9 @@ func buildWakeWatchBinaries(t *testing.T, root string) (string, string) {
 		build.Dir = projectRoot
 		if out, err := build.CombinedOutput(); err != nil {
 			t.Fatalf("build %s: %s %v", pkg, out, err)
+		}
+		if err := os.Chmod(output, 0o755); err != nil {
+			t.Fatal(err)
 		}
 	}
 	return binary, extension

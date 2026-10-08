@@ -593,6 +593,19 @@ type NotificationDrain struct {
 	Superseded       int                  `json:"superseded"`
 	ConsumerID       string               `json:"consumer_id"`
 	DriverGeneration string               `json:"driver_generation"`
+	Parked           []ParkedNotification `json:"parked,omitempty"`
+}
+
+type ParkedNotification struct {
+	NotificationID string    `json:"notification_id"`
+	Kind           string    `json:"kind"`
+	TaskID         string    `json:"task_id,omitempty"`
+	RequestID      string    `json:"request_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	RejectedClaims int       `json:"rejected_claims"`
+	LastResult     string    `json:"last_result"`
+	LastDetail     string    `json:"last_detail"`
+	LastAt         time.Time `json:"last_at"`
 }
 
 type NotificationAckRequest struct {

@@ -58,6 +58,9 @@ func TestRealCmuxMVPIsOptIn(t *testing.T) {
 		if output, err := extensionBuild.CombinedOutput(); err != nil {
 			t.Fatalf("build E2E cmux extension: %s: %v", output, err)
 		}
+		if err := os.Chmod(extensionExecutable, 0o755); err != nil {
+			t.Fatal(err)
+		}
 		extensionBytes, err := os.ReadFile(extensionExecutable)
 		if err != nil {
 			t.Fatal(err)

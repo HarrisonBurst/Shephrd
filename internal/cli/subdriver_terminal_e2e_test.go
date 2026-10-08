@@ -20,6 +20,7 @@ func TestSubdriverTerminalCLIEndToEnd(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 fixture runtime unavailable")
 	}
+	node, nodeErr := exec.LookPath("node")
 	root := t.TempDir()
 	transportFixture, err := filepath.Abs("../pibridge/testdata/transport-harness.mjs")
 	if err != nil {
@@ -32,6 +33,9 @@ func TestSubdriverTerminalCLIEndToEnd(t *testing.T) {
 		cmd.Dir = "../.."
 		if body, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("build: %s %v", body, err)
+		}
+		if err := os.Chmod(output, 0o755); err != nil {
+			t.Fatal(err)
 		}
 	}
 	build(binary, "./cmd/shephrd")
@@ -59,6 +63,9 @@ func TestSubdriverTerminalCLIEndToEnd(t *testing.T) {
 			}
 			for _, mode := range modes {
 				t.Run(runtime+"/"+harness+"/"+mode, func(t *testing.T) {
+					if strings.Contains(mode, "transport-") && nodeErr != nil {
+						t.Skip("node fixture runtime unavailable for the Pi bridge transport fixture")
+					}
 					dir := t.TempDir()
 					cfg := filepath.Join(dir, "config.toml")
 					db := filepath.Join(dir, "state.db")
@@ -83,7 +90,7 @@ func TestSubdriverTerminalCLIEndToEnd(t *testing.T) {
 						"SHEPHRD_EXECUTABLE": binary, "SHEPHRD_WORKER": "", "SHEPHRD_SUBDRIVER_ID": "",
 						"SHEPHRD_SUBDRIVER_GENERATION": "", "SHEPHRD_SUBDRIVER_TOKEN": "",
 						"SHEPHRD_HERDR_LIFECYCLE_SEQ": "", "FIXTURE_MODE": mode, "FIXTURE_DIR": dir,
-						"FIXTURE_TRANSPORT": transportFixture,
+						"FIXTURE_TRANSPORT": transportFixture, "FIXTURE_NODE": node,
 					})
 					state, err := store.Open(db)
 					if err != nil {
@@ -290,7 +297,7 @@ if mode.startswith('repair-'):
  envelopes=[event({'type':'checkpoint','payload':'rejected','checkpoint':bad}),event(done)]
 if mode.startswith('transport-') or mode.startswith('repair-transport'):
  bridge=args[args.index('--extension')+1] if not headless else ''
- p=subprocess.run(['node',os.environ['FIXTURE_TRANSPORT'],bridge],input=json.dumps(dict(session=session,mode=mode,headless=headless,envelopes='\n'.join(envelopes),corrected=corrected(),correction=repair)),text=True)
+ p=subprocess.run([os.environ['FIXTURE_NODE'],os.environ['FIXTURE_TRANSPORT'],bridge],input=json.dumps(dict(session=session,mode=mode,headless=headless,envelopes='\n'.join(envelopes),corrected=corrected(),correction=repair)),text=True)
  sys.exit(p.returncode)
 if headless:
  if repair and mode=='repair-session':session='wrong-session'

@@ -86,6 +86,9 @@ func TestHerdrExtensionPreservesConcreteTerminalOperations(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build Herdr extension: %s: %v", output, err)
 	}
+	if err := os.Chmod(binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	body, err := os.ReadFile(binary)
 	if err != nil {
 		t.Fatal(err)

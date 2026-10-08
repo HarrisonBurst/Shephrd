@@ -846,7 +846,7 @@ func wakeCommand(get func() *application) *cobra.Command {
 	drain.Flags().StringVar(&driverID, "driver-id", "", "Stable consumer identity")
 	drain.Flags().StringVar(&driverGeneration, "driver-generation", "", "Consumer session generation")
 	drain.Flags().DurationVar(&claimTTL, "claim-ttl", 0, "Claim lease duration")
-	command.AddCommand(drain, watchCommand(get))
+	command.AddCommand(drain, watchCommand(get), parkedCommand(get), unparkCommand(get))
 
 	var ackToken, ackDriverID, ackGeneration, handlingID string
 	ack := &cobra.Command{

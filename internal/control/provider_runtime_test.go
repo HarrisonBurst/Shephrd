@@ -51,6 +51,9 @@ func TestConfiguredCmuxExtensionRoutesCoreOrchestrationThroughRealSubprocesses(t
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fixture extension: %s: %v", output, err)
 	}
+	if err := os.Chmod(extensionExecutable, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	extensionBytes, err := os.ReadFile(extensionExecutable)
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +103,9 @@ func TestConfiguredHerdrExtensionRoutesCoreOrchestrationThroughRealSubprocesses(
 	build.Dir = repositoryRoot
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fixture extension: %s: %v", output, err)
+	}
+	if err := os.Chmod(extensionExecutable, 0o755); err != nil {
+		t.Fatal(err)
 	}
 	extensionBytes, err := os.ReadFile(extensionExecutable)
 	if err != nil {

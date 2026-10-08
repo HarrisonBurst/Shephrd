@@ -249,14 +249,17 @@ func (s *Store) AdoptTask(taskID, currentDriverID, newDriverID string) (model.Ta
 }
 
 func (s *Store) DrainNotifications(taskID, consumerID, driverGeneration string, limit int, requestedTTL ...time.Duration) (model.NotificationDrain, error) {
-	return s.drainNotifications(taskID, consumerID, driverGeneration, limit, false, requestedTTL...)
+	return s.drainNotifications(taskID, consumerID, driverGeneration, limit, false, 0, requestedTTL...)
 }
 
-func (s *Store) DrainNotificationExclusive(consumerID, driverGeneration string, ttl time.Duration) (model.NotificationDrain, error) {
-	return s.drainNotifications("", consumerID, driverGeneration, 1, true, ttl)
+// DrainNotificationExclusive is the wake watch drain. It skips notifications
+// parked after maxRejectedClaims consecutive rejected or undeliverable claims;
+// ordinary drains still claim them.
+func (s *Store) DrainNotificationExclusive(consumerID, driverGeneration string, ttl time.Duration, maxRejectedClaims int) (model.NotificationDrain, error) {
+	return s.drainNotifications("", consumerID, driverGeneration, 1, true, maxRejectedClaims, ttl)
 }
 
-func (s *Store) drainNotifications(taskID, consumerID, driverGeneration string, limit int, ownerExclusive bool, requestedTTL ...time.Duration) (model.NotificationDrain, error) {
+func (s *Store) drainNotifications(taskID, consumerID, driverGeneration string, limit int, ownerExclusive bool, maxRejectedClaims int, requestedTTL ...time.Duration) (model.NotificationDrain, error) {
 	result := model.NotificationDrain{Notifications: make([]model.DriverNotification, 0), ConsumerID: consumerID, DriverGeneration: driverGeneration}
 	if err := validateConsumer(consumerID, driverGeneration); err != nil {
 		return result, err
@@ -302,6 +305,10 @@ func (s *Store) drainNotifications(taskID, consumerID, driverGeneration string, 
 		}
 	}
 
+	parked, err := parkedNotifications(tx, consumerID, maxRejectedClaims)
+	if err != nil {
+		return result, err
+	}
 	query := notificationSelect + ` WHERE d.state='pending' AND d.target_driver_id=? AND ` + reportDoneNotificationPresentable
 	args := []any{consumerID}
 	if taskID != "" {
@@ -319,6 +326,10 @@ func (s *Store) drainNotifications(taskID, consumerID, driverGeneration string, 
 		if scanErr != nil {
 			rows.Close()
 			return result, scanErr
+		}
+		if entry, ok := parked[notification.NotificationID]; ok {
+			result.Parked = append(result.Parked, describeParked(entry, notification))
+			continue
 		}
 		pending = append(pending, notification)
 	}

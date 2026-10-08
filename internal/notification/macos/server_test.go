@@ -131,6 +131,9 @@ func TestLiveMacOSNotificationIsOptIn(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build notification extension: %s: %v", output, err)
 	}
+	if err := os.Chmod(executable, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	presenter := notification.NewExtensionPresenter([]string{executable}, fileDigest(t, executable), os.Environ())
 	notifier := notification.New(notification.Options{Presenter: presenter, Timeout: 2 * time.Second})
 	result, err := notifier.Notify(context.Background(), notification.Notice{TaskID: "live-test", TaskLabel: "Shephrd live test", Kind: "notification"})

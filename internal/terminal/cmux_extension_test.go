@@ -27,6 +27,9 @@ func TestCmuxExtensionProviderOrchestratesRealSubprocesses(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fixture extension: %s: %v", output, err)
 	}
+	if err := os.Chmod(binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(binary)
 	if err != nil {
 		t.Fatal(err)

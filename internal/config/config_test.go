@@ -218,11 +218,15 @@ func TestWakeWatchConfiguration(t *testing.T) {
 		min     time.Duration
 		max     time.Duration
 		horizon time.Duration
+		parkAt  int
 		valid   bool
 	}{
-		{name: "fresh", min: 2 * time.Second, max: 30 * time.Second, horizon: 30 * time.Minute, valid: true},
-		{name: "explicit minimum", body: "[wake_watch]\npoll_min = \"45s\"\n", min: 45 * time.Second, max: 45 * time.Second, horizon: 30 * time.Minute, valid: true},
-		{name: "delivery", body: "[wake_watch]\nrenew_horizon = \"5m\"\n" + delivery + "environment = [\"HOME\"]\n", min: 2 * time.Second, max: 30 * time.Second, horizon: 5 * time.Minute, valid: true},
+		{name: "fresh", min: 2 * time.Second, max: 30 * time.Second, horizon: 30 * time.Minute, parkAt: 3, valid: true},
+		{name: "explicit minimum", body: "[wake_watch]\npoll_min = \"45s\"\nmax_rejected_claims = 1\n", min: 45 * time.Second, max: 45 * time.Second, horizon: 30 * time.Minute, parkAt: 1, valid: true},
+		{name: "delivery", body: "[wake_watch]\nrenew_horizon = \"5m\"\nmax_rejected_claims = 20\n" + delivery + "environment = [\"HOME\"]\n", min: 2 * time.Second, max: 30 * time.Second, horizon: 5 * time.Minute, parkAt: 20, valid: true},
+		{name: "omitted rejected claims", body: "[wake_watch]\nrenew_horizon = \"10m\"\n", min: 2 * time.Second, max: 30 * time.Second, horizon: 10 * time.Minute, parkAt: 3, valid: true},
+		{name: "zero rejected claims", body: "[wake_watch]\nmax_rejected_claims = 0\n"},
+		{name: "excess rejected claims", body: "[wake_watch]\nmax_rejected_claims = 21\n"},
 		{name: "inverted bounds", body: "[wake_watch]\npoll_min = \"5s\"\npoll_max = \"1s\"\n"},
 		{name: "zero horizon", body: "[wake_watch]\nrenew_horizon = \"0s\"\n"},
 		{name: "relative command", body: strings.Replace(delivery, "/opt/shephrd-delivery-webhook", "shephrd-delivery-webhook", 1)},
@@ -253,7 +257,7 @@ func TestWakeWatchConfiguration(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if cfg.WakeWatch.PollMin != test.min || cfg.WakeWatch.PollMax != test.max || cfg.WakeWatch.RenewHorizon != test.horizon || (cfg.WakeWatch.Delivery != nil) != strings.Contains(test.body, "delivery") {
+				if cfg.WakeWatch.PollMin != test.min || cfg.WakeWatch.PollMax != test.max || cfg.WakeWatch.RenewHorizon != test.horizon || cfg.WakeWatch.MaxRejectedClaims != test.parkAt || (cfg.WakeWatch.Delivery != nil) != strings.Contains(test.body, "delivery") {
 					t.Fatalf("wake_watch = %+v", cfg.WakeWatch)
 				}
 			}

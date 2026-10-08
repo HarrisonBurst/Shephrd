@@ -38,18 +38,21 @@ type Event struct {
 }
 
 type Watcher struct {
-	Store           *store.Store
-	Activation      Activation
-	Deliverer       Deliverer
-	DriverID        string
-	Generation      string
-	ClaimTTL        time.Duration
-	PollMin         time.Duration
-	PollMax         time.Duration
-	RenewHorizon    time.Duration
-	DeliveryTimeout time.Duration
-	Log             func(Event)
-	pumping         chan error
+	Store             *store.Store
+	Activation        Activation
+	Deliverer         Deliverer
+	DriverID          string
+	Generation        string
+	ClaimTTL          time.Duration
+	PollMin           time.Duration
+	PollMax           time.Duration
+	RenewHorizon      time.Duration
+	DeliveryTimeout   time.Duration
+	MaxRejectedClaims int
+	Clock             func() time.Time
+	Log               func(Event)
+	pumping           chan error
+	parked            map[string]int
 }
 
 type claim struct {
@@ -62,6 +65,7 @@ type claim struct {
 	nextDelivery time.Time
 	retryDelay   time.Duration
 	finished     bool
+	expiring     bool
 	horizon      bool
 }
 
@@ -108,24 +112,38 @@ func (w *Watcher) drain(ctx context.Context) *claim {
 	if ctx.Err() != nil {
 		return nil
 	}
-	result, err := w.Store.DrainNotificationExclusive(w.DriverID, w.Generation, w.ClaimTTL)
+	result, err := w.Store.DrainNotificationExclusive(w.DriverID, w.Generation, w.ClaimTTL, w.MaxRejectedClaims)
 	if err != nil {
 		w.log(Event{Event: "drain_failed", Detail: err.Error()})
 		return nil
 	}
+	w.logParked(result.Parked)
 	if len(result.Notifications) == 0 {
 		return nil
 	}
 	notification := result.Notifications[0]
-	now := time.Now()
+	now := w.now()
 	current := &claim{notification: notification, claimedAt: now, renewedAt: now, claimUntil: *notification.ClaimUntil, retryDelay: w.PollMin}
 	current.request = driverdelivery.NewRequest(notification, w.Generation, 1, w.obligations())
 	w.log(Event{Event: "claimed", NotificationID: notification.NotificationID, Kind: notification.Kind})
 	return current
 }
 
+func (w *Watcher) logParked(parked []model.ParkedNotification) {
+	current := make(map[string]int, len(parked))
+	for _, notification := range parked {
+		current[notification.NotificationID] = notification.RejectedClaims
+		if w.parked[notification.NotificationID] == notification.RejectedClaims {
+			continue
+		}
+		w.log(Event{Event: "parked", NotificationID: notification.NotificationID, Kind: notification.Kind,
+			Detail: fmt.Sprintf("parked after %d consecutive rejected or undeliverable claims; it stays pending for ordinary drains; list with shephrd wake parked --driver-id %s and redeliver with shephrd wake unpark %s --driver-id %s", notification.RejectedClaims, w.DriverID, notification.NotificationID, w.DriverID)})
+	}
+	w.parked = current
+}
+
 func (w *Watcher) tick(ctx context.Context, current *claim) bool {
-	now := time.Now()
+	now := w.now()
 	stored, err := w.Store.Notification(current.notification.NotificationID)
 	if err != nil {
 		w.log(Event{Event: "observe_failed", NotificationID: current.notification.NotificationID, Detail: err.Error()})
@@ -141,7 +159,7 @@ func (w *Watcher) tick(ctx context.Context, current *claim) bool {
 		w.log(Event{Event: "horizon", NotificationID: current.notification.NotificationID, Detail: "renewal stopped; the claim expires and is redelivered under a new claim"})
 	}
 	deliver := !current.finished && !current.horizon && !now.Before(current.nextDelivery)
-	if !current.horizon && !now.Before(current.renewalDue()) {
+	if !current.horizon && !current.expiring && !now.Before(current.renewalDue()) {
 		request := model.NotificationRenewRequest{NotificationID: current.notification.NotificationID, ClaimToken: current.notification.ClaimToken, ConsumerID: w.DriverID, DriverGeneration: w.Generation}
 		renewed, err := w.Store.RenewNotification(request, w.ClaimTTL)
 		switch {
@@ -194,10 +212,10 @@ func (c *claim) renewalDue() time.Time {
 }
 
 func (w *Watcher) claimDelay(current *claim) time.Duration {
-	if current.horizon {
+	if current.horizon || current.expiring {
 		return w.PollMin
 	}
-	return min(w.PollMin, max(time.Until(current.renewalDue()), time.Second))
+	return min(w.PollMin, max(current.renewalDue().Sub(w.now()), time.Second))
 }
 
 func settlement(stored model.DriverNotification, current *claim, now time.Time) (string, string) {
@@ -236,11 +254,15 @@ func (w *Watcher) deliver(ctx context.Context, current *claim) {
 			outcome = driverdelivery.OutcomeRetryable
 		}
 	}
-	if outcome == driverdelivery.OutcomeRetryable {
-		current.nextDelivery = time.Now().Add(current.retryDelay)
+	switch outcome {
+	case driverdelivery.OutcomeRetryable:
+		current.nextDelivery = w.now().Add(current.retryDelay)
 		current.retryDelay = min(current.retryDelay*2, w.PollMax)
-	} else {
+	case driverdelivery.OutcomeDelivered:
 		current.finished = true
+	default:
+		current.finished, current.expiring = true, true
+		detail += fmt.Sprintf("; renewal stopped, the claim expires at %s and the next drain redelivers it under a new claim", current.claimUntil.UTC().Format(time.RFC3339))
 	}
 	detail = bounded(detail)
 	log := model.NotificationDeliveryLog{NotificationID: current.notification.NotificationID, Operation: "notify", ConsumerID: w.DriverID, DriverGeneration: w.Generation, ClaimToken: current.notification.ClaimToken, Result: outcome, Detail: fmt.Sprintf("%s attempt %d: %s", driverdelivery.CapabilityName, current.attempts, detail)}
@@ -259,8 +281,15 @@ func (w *Watcher) obligations() *driverdelivery.Obligations {
 	return &driverdelivery.Obligations{SchemaVersion: snapshot.SchemaVersion, Counts: driverdelivery.ObligationCounts{ActNow: counts.ActNow, NeedsDisposition: counts.NeedsDisposition, ResultReady: counts.ResultReady, PlannedReady: counts.PlannedReady}}
 }
 
+func (w *Watcher) now() time.Time {
+	if w.Clock != nil {
+		return w.Clock()
+	}
+	return time.Now()
+}
+
 func (w *Watcher) log(event Event) {
-	event.Time = time.Now().UTC()
+	event.Time = w.now().UTC()
 	event.Detail = bounded(event.Detail)
 	w.Log(event)
 }

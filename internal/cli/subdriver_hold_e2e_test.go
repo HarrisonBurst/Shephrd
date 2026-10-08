@@ -77,6 +77,9 @@ func TestSubdriverStaleHoldWatcherE2E(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build terminal fixture: %s %v", output, err)
 	}
+	if err := os.Chmod(extension, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	body, err = os.ReadFile(extension)
 	if err != nil {
 		t.Fatal(err)

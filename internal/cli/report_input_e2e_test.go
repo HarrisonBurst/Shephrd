@@ -48,6 +48,9 @@ func TestCLIExplicitCrossRepositoryReportHandoffE2E(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build report handler E2E fixture: %s: %v", output, err)
 	}
+	if err := os.Chmod(handlerExecutable, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	handlerBody, err := os.ReadFile(handlerExecutable)
 	if err != nil {
 		t.Fatal(err)

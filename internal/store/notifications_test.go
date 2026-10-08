@@ -323,7 +323,7 @@ func TestExclusiveDrainWaitsForTheOwnersOutstandingClaim(t *testing.T) {
 	}
 	drain := func(owner, generation string) model.NotificationDrain {
 		t.Helper()
-		result, err := state.DrainNotificationExclusive(owner, generation, 30*time.Second)
+		result, err := state.DrainNotificationExclusive(owner, generation, 30*time.Second, 0)
 		if err != nil {
 			t.Fatal(err)
 		}

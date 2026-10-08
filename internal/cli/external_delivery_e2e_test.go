@@ -49,6 +49,9 @@ func TestCLIExternalDeliveryAttestationFollowupSquashE2E(t *testing.T) {
 	if output, err := observerBuild.CombinedOutput(); err != nil {
 		t.Fatalf("build GitHub observer E2E binary: %s: %v", output, err)
 	}
+	if err := os.Chmod(observerBinary, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	observerBody, err := os.ReadFile(observerBinary)
 	if err != nil {
 		t.Fatal(err)

@@ -46,6 +46,10 @@ func buildObserver(t *testing.T) {
 			observerBuild = fmt.Errorf("%s: %w", output, err)
 			return
 		}
+		if err := os.Chmod(binary, 0o755); err != nil {
+			observerBuild = err
+			return
+		}
 		body, err := os.ReadFile(binary)
 		if err != nil {
 			observerBuild = err
