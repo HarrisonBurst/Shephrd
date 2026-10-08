@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","cwd":"/worktree","session_id":"c96445d6-6ad7-44c7-a6cd-4819dff958f1"}
+{"type":"assistant","session_id":"c96445d6-6ad7-44c7-a6cd-4819dff958f1","parent_tool_use_id":null,"message":{"role":"assistant","content":[{"type":"text","text":"<shephrd-event>{\"type\":\"question\",\"payload\":\"Which color?\"}</shephrd-event>"}]}}
+{"type":"result","subtype":"success","session_id":"c96445d6-6ad7-44c7-a6cd-4819dff958f1","is_error":false,"terminal_reason":"completed"}
+{"type":"system","subtype":"init","cwd":"/worktree","session_id":"c96445d6-6ad7-44c7-a6cd-4819dff958f1"}
+{"type":"assistant","session_id":"c96445d6-6ad7-44c7-a6cd-4819dff958f1","parent_tool_use_id":null,"message":{"role":"assistant","content":[{"type":"text","text":"<shephrd-event>{\"type\":\"done\",\"payload\":\"Used blue.\",\"artifact\":\"report:/tmp/example.md\"}</shephrd-event>"}]}}
+{"type":"result","subtype":"success","session_id":"c96445d6-6ad7-44c7-a6cd-4819dff958f1","is_error":false,"terminal_reason":"completed"}

@@ -1,0 +1,9 @@
+/bin/
+/shephrd
+/.lavish/
+/.shephrd/memory.md
+/.shephrd/memory/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

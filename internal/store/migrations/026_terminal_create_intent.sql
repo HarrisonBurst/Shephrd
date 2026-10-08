@@ -1,0 +1,9 @@
+ALTER TABLE attempts ADD COLUMN terminal_create_state TEXT NOT NULL DEFAULT '';
+ALTER TABLE attempts ADD COLUMN terminal_create_run_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE attempts ADD COLUMN terminal_create_backend TEXT NOT NULL DEFAULT '';
+ALTER TABLE attempts ADD COLUMN terminal_create_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE attempts ADD COLUMN terminal_create_window_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE attempts ADD COLUMN terminal_create_workspace_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE attempts ADD COLUMN terminal_create_cwd TEXT NOT NULL DEFAULT '';
+ALTER TABLE attempts ADD COLUMN terminal_create_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE attempts ADD COLUMN terminal_create_generation INTEGER NOT NULL DEFAULT 0;

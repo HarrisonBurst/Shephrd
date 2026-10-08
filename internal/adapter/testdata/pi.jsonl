@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"019fee6a-58bc-70ea-a6e3-19cb3f35a93f","cwd":"/worktree"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"<shephrd-event>{\"type\":\"question\",\"payload\":\"Which color?\"}</shephrd-event>"}],"stopReason":"stop"}}
+{"type":"agent_end","willRetry":false}
+{"type":"agent_settled"}
+{"type":"session","version":3,"id":"019fee6a-58bc-70ea-a6e3-19cb3f35a93f","cwd":"/worktree"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"<shephrd-event>{\"type\":\"done\",\"payload\":\"Used blue.\",\"artifact\":\"report:/tmp/example.md\"}</shephrd-event>"}],"stopReason":"stop"}}
+{"type":"agent_end","willRetry":false}
+{"type":"agent_settled"}

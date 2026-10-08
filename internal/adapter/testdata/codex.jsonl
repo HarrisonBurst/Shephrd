@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"019fee7a-bc0c-7c41-b412-3a06058ebdb2"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"<shephrd-event>{\"type\":\"question\",\"payload\":\"Which color?\"}</shephrd-event>"}}
+{"type":"turn.completed","usage":{"input_tokens":14897,"output_tokens":25}}
+{"type":"thread.started","thread_id":"019fee7a-bc0c-7c41-b412-3a06058ebdb2"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"<shephrd-event>{\"type\":\"done\",\"payload\":\"Used blue.\",\"artifact\":\"report:/tmp/example.md\"}</shephrd-event>"}}
+{"type":"turn.completed","usage":{"input_tokens":30048,"output_tokens":58}}
