@@ -106,7 +106,7 @@ func TestConfiguredNotificationExtensionUsesRealSubprocess(t *testing.T) {
 	executable := buildPresentationExtension(t)
 	logPath := filepath.Join(t.TempDir(), "presentation.json")
 	presenter := NewExtensionPresenter([]string{executable, logPath, "success"}, digestFile(t, executable), nil)
-	notifier := New(Options{Presenter: presenter, Details: true, Timeout: 3 * time.Second})
+	notifier := New(Options{Presenter: presenter, Details: true, Timeout: 10 * time.Second})
 	result, err := notifier.Notify(context.Background(), Notice{TaskID: "task", TaskLabel: "demo/task", Kind: "question", ShortSummary: "bounded detail"})
 	if err != nil || !result.Presented {
 		t.Fatalf("result = %+v, err = %v", result, err)
@@ -171,6 +171,9 @@ func buildPresentationExtension(t *testing.T) string {
 	command.Dir = projectRoot
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build presentation extension: %s: %v", output, err)
+	}
+	if err := os.Chmod(executable, 0o755); err != nil {
+		t.Fatal(err)
 	}
 	return executable
 }

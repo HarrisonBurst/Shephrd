@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -226,6 +227,9 @@ func (s Service) ResumeSubdriverWithModelSelection(id string, foreground bool, m
 		if err != nil {
 			return c, err
 		}
+		if selection.Backend == "herdr" {
+			env = withoutEnvironment(env, selection.Provider.ContextKeys())
+		}
 		endpoint, err := client.CreateWorkspace(terminal.WorkspaceSpec{WindowID: selection.Parent.WindowID, WorkspaceID: selection.Parent.WorkspaceID, CWD: cwd, Label: label, Harness: harness, Source: "shephrd:coordinator:" + id + ":" + strconv.Itoa(f.Generation), Generation: f.Generation, Environment: env})
 		if err != nil {
 			_ = s.Store.FinishSubdriver(f, c.Checkpoint, "terminal create uncertain: "+err.Error())
@@ -253,6 +257,19 @@ func (s Service) subdriverEnvironment(f model.SubdriverFence, executable, config
 	env := s.mergedEnvironment(map[string]string{"SHEPHRD_PI_WATCHER_ENABLED": "0", "SHEPHRD_EXECUTABLE": executable, "SHEPHRD_CONFIG": configPath, "SHEPHRD_WORKER": "", "SHEPHRD_ATTEMPT_ID": ""})
 	return append(env, "SHEPHRD_SUBDRIVER_ID="+f.ID, "SHEPHRD_SUBDRIVER_GENERATION="+strconv.Itoa(f.Generation), "SHEPHRD_SUBDRIVER_TOKEN="+f.Token,
 		"SHEPHRD_COORDINATOR_ID="+f.ID, "SHEPHRD_COORDINATOR_GENERATION="+strconv.Itoa(f.Generation), "SHEPHRD_COORDINATOR_TOKEN="+f.Token)
+}
+
+// withoutEnvironment drops the launching pane's Herdr markers: Herdr supplies
+// each pane's own, so sub-driver children never name the watcher's pane.
+func withoutEnvironment(env, keys []string) []string {
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if !slices.Contains(keys, key) {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
 }
 func (s Service) subdriverLabel(c model.Subdriver) (string, error) {
 	if c.RepoID == "" {

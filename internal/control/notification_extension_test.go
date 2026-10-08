@@ -121,6 +121,9 @@ func buildControlNotificationExtension(t *testing.T) string {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build presentation extension: %s: %v", output, err)
 	}
+	if err := os.Chmod(executable, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return executable
 }
 

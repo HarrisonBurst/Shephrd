@@ -94,10 +94,11 @@ type PiWatcherConfig struct {
 }
 
 type WakeWatchConfig struct {
-	PollMin      time.Duration            `toml:"poll_min" json:"poll_min"`
-	PollMax      time.Duration            `toml:"poll_max" json:"poll_max"`
-	RenewHorizon time.Duration            `toml:"renew_horizon" json:"renew_horizon"`
-	Delivery     *DeliveryExtensionConfig `toml:"delivery,omitempty" json:"delivery,omitempty"`
+	PollMin           time.Duration            `toml:"poll_min" json:"poll_min"`
+	PollMax           time.Duration            `toml:"poll_max" json:"poll_max"`
+	RenewHorizon      time.Duration            `toml:"renew_horizon" json:"renew_horizon"`
+	MaxRejectedClaims int                      `toml:"max_rejected_claims" json:"max_rejected_claims"`
+	Delivery          *DeliveryExtensionConfig `toml:"delivery,omitempty" json:"delivery,omitempty"`
 }
 
 type DeliveryExtensionConfig struct {
@@ -280,7 +281,7 @@ func defaults() (Config, error) {
 			ClaimTTLMin: 30 * time.Second, ClaimTTLMax: 30 * time.Minute, DriverID: "driver:" + uuid.NewString()},
 		Notifications: NotificationConfig{Enabled: false, Details: false, TaskPerMinute: 2, GlobalPerMinute: 10},
 		PiWatcher:     PiWatcherConfig{Enabled: false, PollMin: time.Second, PollMax: time.Second},
-		WakeWatch:     WakeWatchConfig{PollMin: 2 * time.Second, PollMax: 30 * time.Second, RenewHorizon: 30 * time.Minute},
+		WakeWatch:     WakeWatchConfig{PollMin: 2 * time.Second, PollMax: 30 * time.Second, RenewHorizon: 30 * time.Minute, MaxRejectedClaims: 3},
 	}, nil
 }
 
@@ -355,6 +356,9 @@ func validateEnvironmentAllowlist(names []string) error {
 func validateWakeWatch(watch *WakeWatchConfig) error {
 	if watch.PollMin <= 0 || watch.PollMax < watch.PollMin || watch.RenewHorizon <= 0 || watch.RenewHorizon > 24*time.Hour {
 		return fmt.Errorf("wake_watch poll bounds or renew_horizon are invalid")
+	}
+	if watch.MaxRejectedClaims < 1 || watch.MaxRejectedClaims > 20 {
+		return fmt.Errorf("wake_watch.max_rejected_claims must be between 1 and 20")
 	}
 	if watch.Delivery == nil {
 		return nil

@@ -148,37 +148,40 @@ printf '{"wire":{"major":1,"minor":0},"request_id":"%s","capability":"driver.del
 	executable := writeScript(t, dir, "delivery", script)
 	environment := []string{"ALLOWED_VALUE=visible", "HIDDEN_VALUE=hidden"}
 	deliverer := NewExtensionDeliverer(config.DeliveryExtensionConfig{ExtensionID: "fixture.delivery", Command: []string{executable}, SHA256: digest(t, executable), Environment: []string{"ALLOWED_VALUE"}}, environment)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := deliverer.Describe(ctx); err != nil {
+	operation := func() context.Context {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		t.Cleanup(cancel)
+		return ctx
+	}
+	if err := deliverer.Describe(operation()); err != nil {
 		t.Fatal(err)
 	}
 	until := time.Now().Add(time.Minute)
 	request := NewRequest(model.DriverNotification{NotificationID: "wake:1", Kind: "done", TaskID: "task_1", CreatedAt: time.Now(), ClaimOwner: "driver:hermes", ClaimToken: "token", ClaimUntil: &until}, "watch:1", 1, nil)
-	result, err := deliverer.Deliver(ctx, request)
+	result, err := deliverer.Deliver(operation(), request)
 	if err != nil || result != (Result{Outcome: OutcomeDelivered, Detail: "visible/unset"}) {
 		t.Fatalf("result = %+v, err = %v", result, err)
 	}
 
 	wrongID := NewExtensionDeliverer(config.DeliveryExtensionConfig{ExtensionID: "other.delivery", Command: []string{executable}, SHA256: digest(t, executable)}, environment)
-	if err := wrongID.Describe(ctx); !protocolViolation(err) {
+	if err := wrongID.Describe(operation()); !protocolViolation(err) {
 		t.Fatalf("wrong extension identity = %v", err)
 	}
 	broad := writeScript(t, dir, "broad", "#!/bin/sh\nprintf '%s\\n' '"+strings.Replace(manifest, `"operations":["deliver"]`, `"operations":["deliver","ack"]`, 1)+"'\n")
-	if err := NewExtensionDeliverer(config.DeliveryExtensionConfig{ExtensionID: "fixture.delivery", Command: []string{broad}, SHA256: digest(t, broad)}, nil).Describe(ctx); !protocolViolation(err) {
+	if err := NewExtensionDeliverer(config.DeliveryExtensionConfig{ExtensionID: "fixture.delivery", Command: []string{broad}, SHA256: digest(t, broad)}, nil).Describe(operation()); !protocolViolation(err) {
 		t.Fatalf("broader manifest = %v", err)
 	}
 	unpinned := NewExtensionDeliverer(config.DeliveryExtensionConfig{ExtensionID: "fixture.delivery", Command: []string{executable}, SHA256: strings.Repeat("0", 64)}, environment)
-	if err := unpinned.Describe(ctx); err == nil || !strings.Contains(err.Error(), "SHA-256 does not match") {
+	if err := unpinned.Describe(operation()); err == nil || !strings.Contains(err.Error(), "SHA-256 does not match") {
 		t.Fatalf("digest mismatch = %v", err)
 	}
 	invalid := request
 	invalid.Notification.Kind = "coordinator-question"
-	if _, err := deliverer.Deliver(ctx, invalid); err == nil {
+	if _, err := deliverer.Deliver(operation(), invalid); err == nil {
 		t.Fatal("invalid request was delivered")
 	}
 	badResult := writeScript(t, dir, "bad-result", strings.Replace(script, `"outcome":"delivered"`, `"outcome":"acknowledged"`, 1))
-	if _, err := NewExtensionDeliverer(config.DeliveryExtensionConfig{ExtensionID: "fixture.delivery", Command: []string{badResult}, SHA256: digest(t, badResult)}, nil).Deliver(ctx, request); !protocolViolation(err) {
+	if _, err := NewExtensionDeliverer(config.DeliveryExtensionConfig{ExtensionID: "fixture.delivery", Command: []string{badResult}, SHA256: digest(t, badResult)}, nil).Deliver(operation(), request); !protocolViolation(err) {
 		t.Fatalf("invalid outcome = %v", err)
 	}
 }

@@ -205,9 +205,15 @@ func start(t *testing.T, f *fixture, r *recorder, deliverer Deliverer, horizon t
 
 func startGeneration(t *testing.T, f *fixture, r *recorder, deliverer Deliverer, horizon time.Duration, generation string) (string, func()) {
 	t.Helper()
+	return startWatcher(t, f, r, deliverer, generation, func(w *Watcher) { w.RenewHorizon = horizon })
+}
+
+func startWatcher(t *testing.T, f *fixture, r *recorder, deliverer Deliverer, generation string, configure func(*Watcher)) (string, func()) {
+	t.Helper()
 	watcher := Watcher{Store: f.state, Activation: r, Deliverer: deliverer, DriverID: owner, Generation: generation,
-		ClaimTTL: time.Minute, PollMin: 20 * time.Millisecond, PollMax: 40 * time.Millisecond, RenewHorizon: horizon,
+		ClaimTTL: time.Minute, PollMin: 20 * time.Millisecond, PollMax: 40 * time.Millisecond, RenewHorizon: time.Hour,
 		DeliveryTimeout: 500 * time.Millisecond, Log: r.log}
+	configure(&watcher)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -224,6 +230,40 @@ func startGeneration(t *testing.T, f *fixture, r *recorder, deliverer Deliverer,
 	}
 	t.Cleanup(stop)
 	return generation, stop
+}
+
+type clock struct {
+	mu     sync.Mutex
+	offset time.Duration
+}
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().Add(c.offset)
+}
+
+func (c *clock) advance(duration time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offset += duration
+}
+
+func (c *clock) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offset = 0
+}
+
+func (r *recorder) passes(t *testing.T, description string, count int) {
+	t.Helper()
+	_, pumps := r.counts()
+	eventually(t, description, func() bool { _, current := r.counts(); return current >= pumps+count })
+}
+
+func (f *fixture) expire(id string) {
+	f.t.Helper()
+	f.exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano), id)
 }
 
 func eventually(t *testing.T, description string, condition func() bool) {
@@ -313,12 +353,15 @@ func TestWatcherRetriesRetryableAndStopsOnRejected(t *testing.T) {
 			return driverdelivery.Result{Outcome: driverdelivery.OutcomeRejected, Detail: "HTTP 403"}, nil
 		},
 	}}
-	start(t, f, r, r, time.Hour)
+	fake := &clock{}
+	startWatcher(t, f, r, r, "watch:rejected", func(w *Watcher) { w.Clock = fake.now })
 	eventually(t, "three delivery attempts", func() bool { return len(r.delivered()) == 3 })
-	time.Sleep(200 * time.Millisecond)
+	claimed := f.notification(id)
+	fake.advance(31 * time.Second)
+	r.passes(t, "watcher passes after the rejection with renewal due", 5)
 	requests := r.delivered()
-	if len(requests) != 3 {
-		t.Fatalf("delivery continued after rejection: %d", len(requests))
+	if len(requests) != 3 || r.eventCount("renewed")+r.eventCount("renew_failed") != 0 {
+		t.Fatalf("delivery or renewal continued after rejection: deliveries %d, events %+v", len(requests), r.events)
 	}
 	for index, request := range requests {
 		if request.Claim.DeliveryAttempt != index+1 || request.Claim.ClaimToken != requests[0].Claim.ClaimToken {
@@ -338,27 +381,41 @@ func TestWatcherRetriesRetryableAndStopsOnRejected(t *testing.T) {
 	if strings.Join(results, ",") != "retryable,retryable,rejected" {
 		t.Fatalf("delivery log results = %v", results)
 	}
-	if notice := f.notification(id); notice.State != model.NotificationClaimed || notice.AckedAt != nil {
-		t.Fatalf("rejected delivery changed notification state: %+v", notice)
+	if notice := f.notification(id); notice.State != model.NotificationClaimed || notice.AckedAt != nil || !notice.ClaimUntil.Equal(*claimed.ClaimUntil) {
+		t.Fatalf("rejected delivery changed notification state or renewed: %+v", notice)
 	}
 	if presented, err := f.state.NotificationPresentationRecorded(id); err != nil || presented {
 		t.Fatalf("driver delivery recorded as desktop presentation: %v %v", presented, err)
+	}
+	fake.advance(30 * time.Second)
+	eventually(t, "claim expiry after the TTL", func() bool { return r.eventCount("expired") == 1 })
+	fake.reset()
+	f.expire(id)
+	eventually(t, "redelivery under a new claim", func() bool { return len(r.delivered()) == 4 })
+	if redelivered := r.delivered()[3].Claim; redelivered.ClaimToken == requests[0].Claim.ClaimToken || redelivered.DeliveryAttempt != 1 {
+		t.Fatalf("redelivery = %+v", redelivered)
+	}
+	if notice := f.notification(id); notice.AckedAt != nil || notice.DeliveryAttempts != 2 {
+		t.Fatalf("notification = %+v", notice)
 	}
 }
 
 func TestWatcherTreatsProtocolFailuresAsUndeliverable(t *testing.T) {
 	f := newFixture(t)
-	f.subdriverReturn("question")
+	id := f.subdriverReturn("question")
 	r := &recorder{outcomes: []func() (driverdelivery.Result, error){
 		func() (driverdelivery.Result, error) {
 			return driverdelivery.Result{}, &extensionhost.HostError{Kind: extensionhost.ErrorProtocolViolation, Operation: "deliver"}
 		},
 	}}
-	start(t, f, r, r, time.Hour)
+	fake := &clock{}
+	startWatcher(t, f, r, r, "watch:undeliverable", func(w *Watcher) { w.Clock = fake.now })
 	eventually(t, "undeliverable", func() bool { return r.eventCount(OutcomeUndeliverable) == 1 })
-	time.Sleep(150 * time.Millisecond)
-	if len(r.delivered()) != 1 {
-		t.Fatalf("undeliverable claim was retried: %d", len(r.delivered()))
+	claimed := f.notification(id)
+	fake.advance(31 * time.Second)
+	r.passes(t, "watcher passes after the undeliverable attempt", 5)
+	if len(r.delivered()) != 1 || r.eventCount("renewed") != 0 || !f.notification(id).ClaimUntil.Equal(*claimed.ClaimUntil) {
+		t.Fatalf("undeliverable claim was retried or renewed: deliveries %d, events %+v", len(r.delivered()), r.events)
 	}
 }
 
@@ -395,17 +452,22 @@ func TestWatcherRenewsBeforeExpiryThenStopsAtHorizonAndRedelivers(t *testing.T) 
 	f := newFixture(t)
 	id := f.subdriverReturn("question")
 	r := &recorder{}
-	start(t, f, r, r, 1500*time.Millisecond)
+	fake := &clock{}
+	startWatcher(t, f, r, r, "watch:horizon", func(w *Watcher) { w.Clock = fake.now })
 	eventually(t, "first delivery", func() bool { return len(r.delivered()) == 1 })
 	original := r.delivered()[0].Claim
-	f.exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, time.Now().UTC().Add(1500*time.Millisecond).Format(time.RFC3339Nano), id)
+	fake.advance(31 * time.Second)
 	eventually(t, "renewal", func() bool { return r.eventCount("renewed") >= 1 })
-	if renewed := f.notification(id); renewed.ClaimToken != original.ClaimToken || renewed.ClaimUntil == nil || time.Until(*renewed.ClaimUntil) < 30*time.Second {
+	if renewed := f.notification(id); renewed.ClaimToken != original.ClaimToken || renewed.ClaimUntil == nil || !renewed.ClaimUntil.After(original.ClaimUntil) || time.Until(*renewed.ClaimUntil) < 30*time.Second {
 		t.Fatalf("renewed claim = %+v", renewed)
 	}
+	f.exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, time.Now().UTC().Add(3*time.Hour).Format(time.RFC3339Nano), id)
+	fake.advance(time.Hour)
 	eventually(t, "renewal horizon", func() bool { return r.eventCount("horizon") == 1 })
 	renewals := r.eventCount("renewed")
-	f.exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano), id)
+	r.passes(t, "watcher passes past the horizon", 5)
+	fake.reset()
+	f.expire(id)
 	eventually(t, "redelivery under a new claim", func() bool { return len(r.delivered()) == 2 })
 	redelivered := r.delivered()[1]
 	if redelivered.Notification.NotificationID != id || redelivered.Claim.ClaimToken == original.ClaimToken || redelivered.Claim.DeliveryAttempt != 1 || r.eventCount("expired") != 1 {
@@ -666,19 +728,24 @@ func TestWatcherWithholdsDeliveryWhenRenewalFails(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			f := newFixture(t)
 			id := f.subdriverReturn("question")
+			fake := &clock{}
 			r := &recorder{outcomes: []func() (driverdelivery.Result, error){
 				func() (driverdelivery.Result, error) {
-					time.Sleep(1100 * time.Millisecond)
-					f.exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, time.Now().UTC().Add(600*time.Millisecond).Format(time.RFC3339Nano), id)
 					test.fault(f, id)
+					fake.advance(31 * time.Second)
 					return driverdelivery.Result{Outcome: driverdelivery.OutcomeRetryable, Detail: "HTTP 503"}, nil
 				},
 			}}
-			start(t, f, r, r, time.Hour)
+			startWatcher(t, f, r, r, "watch:renewal-fault", func(w *Watcher) { w.Clock = fake.now })
 			eventually(t, "failed renewal", func() bool { return r.eventCount("renew_failed") >= 1 })
+			r.passes(t, "passes while the retry is due and renewal keeps failing", 5)
 			_, pumps := r.counts()
+			if len(r.delivered()) != 1 || r.eventCount("renew_failed") < 2 {
+				t.Fatalf("delivered after a failed renewal: deliveries %d, events %+v", len(r.delivered()), r.events)
+			}
+			fake.advance(time.Minute)
 			eventually(t, "expiry observed from stored state", func() bool { return r.eventCount("expired") == 1 })
-			if _, current := r.counts(); len(r.delivered()) != 1 || r.eventCount("renewed") != 0 || current <= pumps {
+			if _, current := r.counts(); len(r.delivered()) != 1 || r.eventCount("renewed") != 0 || current < pumps {
 				t.Fatalf("delivered after a failed renewal: deliveries %d, pumps %d -> %d, events %+v", len(r.delivered()), pumps, current, r.events)
 			}
 		})

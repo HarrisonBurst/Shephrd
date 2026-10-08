@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,14 @@ import (
 )
 
 func TestPiWorkerTransportCompletion(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node fixture runtime unavailable for the Pi bridge transport fixture")
+	}
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 fixture runtime unavailable")
+	}
 	grace := interactivePiShutdownGrace
 	interactivePiShutdownGrace = 100 * time.Millisecond
 	t.Cleanup(func() { interactivePiShutdownGrace = grace })
@@ -50,7 +59,7 @@ func TestPiWorkerTransportCompletion(t *testing.T) {
 				if err := os.WriteFile(config, input, 0600); err != nil {
 					t.Fatal(err)
 				}
-				script := fmt.Sprintf(`#!/usr/bin/env python3
+				script := fmt.Sprintf(`#!%s
 import sys,json,subprocess,os
 args=sys.argv[1:]
 payload=json.load(open(%q))
@@ -63,9 +72,9 @@ else:
  os.makedirs(os.path.dirname(%q),exist_ok=True)
  with open(%q,'w') as f:f.write('report written once\n')
 bridge=args[args.index('--extension')+1] if '--extension' in args else ''
-p=subprocess.run(['node',%q,bridge],input=json.dumps(payload),text=True)
+p=subprocess.run([%q,%q,bridge],input=json.dumps(payload),text=True)
 sys.exit(p.returncode)
-`, config, filepath.Join(root, "effects"), report, report, fixture)
+`, python, config, filepath.Join(root, "effects"), report, report, node, fixture)
 				if err := os.WriteFile(filepath.Join(root, "bin", "pi"), []byte(script), 0700); err != nil {
 					t.Fatal(err)
 				}

@@ -53,6 +53,9 @@ func TestRenamedCommandAuditContractsE2E(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build repository scanner: %s: %v", output, err)
 	}
+	if err := os.Chmod(scannerPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	scannerBody, err := os.ReadFile(scannerPath)
 	if err != nil {
 		t.Fatal(err)

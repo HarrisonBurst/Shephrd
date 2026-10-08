@@ -22,6 +22,9 @@ func liveHerdrExtensionClient(t *testing.T) (RuntimeClient, Parent) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build E2E Herdr extension: %s: %v", output, err)
 	}
+	if err := os.Chmod(executable, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	body, err := os.ReadFile(executable)
 	if err != nil {
 		t.Fatal(err)

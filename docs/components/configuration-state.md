@@ -94,6 +94,7 @@ The driver-agnostic [`wake watch`](notifications-watchers.md#driver-agnostic-wat
 poll_min = "2s"
 poll_max = "30s"
 renew_horizon = "30m"
+max_rejected_claims = 3
 
 [wake_watch.delivery]
 extension_id = "shephrd.delivery-webhook"
@@ -102,7 +103,7 @@ sha256 = "64-lowercase-hex-digits"
 environment = []
 ```
 
-`poll_min` must be positive, `poll_max` defaults to at least `poll_min` and may not be lower, and `renew_horizon` must be positive and at most 24 hours. The claim lease remains `wake.claim_ttl` within its existing bounds. The delivery table follows the lifecycle handler trust shape: a valid `extension_id`, an absolute command vector of at most 16 arguments run without a shell or `PATH` lookup, a pinned digest checked before every launch, and at most 16 allowlisted environment names excluding `SHEPHRD_*`, `LD_*`, and `DYLD_*`. Without the table `wake watch` refuses to start, and no other command launches the delivery extension.
+`poll_min` must be positive, `poll_max` defaults to at least `poll_min` and may not be lower, and `renew_horizon` must be positive and at most 24 hours. The claim lease remains `wake.claim_ttl` within its existing bounds. `max_rejected_claims` defaults to 3 and accepts 1-20: after that many consecutive watcher claims of one notification end `rejected` or `undeliverable` with no later `delivered` claim, `wake watch` [parks](notifications-watchers.md#parking-and-unpark) it. Parking state is derived from the existing delivery log, so there is no schema change and changing the threshold applies to existing history immediately. There is no `wake_watch` terminal target: Herdr sub-driver activation always uses the watcher's own Herdr pane context (see [Herdr panes](notifications-watchers.md#running-the-watcher-in-a-herdr-pane)). The delivery table follows the lifecycle handler trust shape: a valid `extension_id`, an absolute command vector of at most 16 arguments run without a shell or `PATH` lookup, a pinned digest checked before every launch, and at most 16 allowlisted environment names excluding `SHEPHRD_*`, `LD_*`, and `DYLD_*`. Without the table `wake watch` refuses to start, and no other command launches the delivery extension.
 
 The first-party Herdr and cmux process extensions are explicit global opt-ins:
 

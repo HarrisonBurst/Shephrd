@@ -115,6 +115,9 @@ func buildRepositoryScanner(t *testing.T) string {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build repository scanner: %s: %v", output, err)
 	}
+	if err := os.Chmod(executable, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return executable
 }
 
