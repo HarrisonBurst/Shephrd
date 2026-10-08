@@ -8,7 +8,7 @@ Notifications make worker questions and terminal results durable without keeping
 
 Each wake-worthy message copies the task's current `driver_id` into `target_driver_id` in the same transaction. Only that owner and the exact driver generation and claim token can renew or acknowledge a claim. The CLI may derive the notification ID and generation from a presented claim token, but it resolves them to the same full fenced store request before mutation. This is cooperative race prevention for one local account, not an authentication boundary.
 
-The optional Pi watcher owns notification consumption while active. Without it, an integration may perform one bounded pass at a normal turn boundary. Notification handling and desktop presentation results never authorize spawn, recovery, verification, landing, release, retry, archive, or discard.
+The optional Pi watcher, or the driver-agnostic [`wake watch`](#driver-agnostic-watcher) for a non-Pi owner, owns notification consumption while active. Without one, an integration may perform one bounded pass at a normal turn boundary. Notification handling and desktop presentation results never authorize spawn, recovery, verification, landing, release, retry, archive, or discard.
 
 ## Inputs and outputs
 
@@ -26,7 +26,7 @@ The existing notification positional argument plus `--driver-id`, `--driver-gene
 
 ## Persisted state
 
-Notification rows store message/task/attempt identity, target owner, worker generation and cursor, kind, payload and artifact, state, claim lease, acknowledgement, handling identity, and supersession data. Report handler annotation, receipt, and failure state remain in the report result and task inspection projection and are included alongside a claimed report notification without rewriting the worker message payload. A delivery log records claim, reclaim, renew, notify, acknowledge, adopt, supersede, and deduplication operations.
+Notification rows store message/task/attempt identity, target owner, worker generation and cursor, kind, payload and artifact, state, claim lease, acknowledgement, handling identity, and supersession data. Report handler annotation, receipt, and failure state remain in the report result and task inspection projection and are included alongside a claimed report notification without rewriting the worker message payload. A delivery log records claim, reclaim, renew, notify, acknowledge, adopt, supersede, and deduplication operations. `wake watch` records each `driver.delivery` attempt as a `notify` row whose result is `delivered`, `retryable`, `rejected`, or `undeliverable`; only `sent` or `suppressed` notify rows count as completed desktop presentation.
 
 The obligations view has no table. It is derived in one read transaction from tasks, attempts, final checkpoints, accepted current-generation worker terminal counts, report recovery attestations, notifications, landing projections, plans, and latest bounded task annotations.
 
@@ -55,6 +55,39 @@ The watcher consumes the schema 1 acknowledgement receipt and persists the retur
 
 Its injected guidance is limited to current identity, authorization, held-work safety, and no-polling mechanics. It does not require review, a spawn sequence, successor work, or lifecycle actions before acknowledgement. A `settled` wake and residual counts are evidence only. Handling may report a result or missing decision without starting more work; acknowledgement remains tied to the matching successful settled assistant turn, not workflow completion.
 
+## Driver-agnostic watcher
+
+`shephrd wake watch --driver-id <main-owner> [--json-log]` is a long-running foreground process for one non-Pi main driver, intended for a user service manager. It gives that owner the Pi watcher's delivery and activation semantics without a Pi TUI. It requires `wake.enabled` and a pinned `[wake_watch.delivery]` extension, describes and validates that extension before claiming anything, and refuses an empty owner, any `driver:pi:*` owner, sub-driver owners, ordinary worker sessions, and sub-driver sessions.
+
+Each process start uses one `watch:<uuid>` driver generation and takes an exclusive per-owner `flock` on `<data_dir>/watch/<sha256(owner)>.lock` for its lifetime, recording its generation and PID. A second watcher for the same owner exits with `wake_watch_active`. While the lock is held, `wake drain` and `wake pump` for that owner also fail closed with `wake_watch_active` and name the watcher generation and PID. Those manual commands create the lock file if absent and hold a shared lock on it for their own duration, so a watcher cannot start mid-command; that refusal omits watcher identity because no watcher holds the lock. Other owners and `wake ack` are unaffected.
+
+With no outstanding claim the watcher performs the same pass as `wake drain`: sweep recorded runner deaths, run the bounded sub-driver activation pass, then claim at most one FIFO notification under `wake.claim_ttl`. An empty queue backs off from `wake_watch.poll_min` to `poll_max` and makes no model calls. A claim is handed to version 1 of `driver.delivery`; while it remains outstanding the watcher wakes every `poll_min` to:
+
+- read the stored notification and settle on stored state rather than renewal errors; if the read fails the watcher logs `observe_failed` and skips that pass entirely, neither renewing, delivering, pumping, nor draining until stored state is observable again: `acknowledged` under its claim identity drains the next notification immediately; `superseded`, reclaimed `pending`, a changed owner/generation/token, or an expired lease clears the claim without acknowledgement;
+- renew the exact claim on the Pi watcher's cadence, half the remaining lease bounded to 1-60 seconds, until `wake_watch.renew_horizon` after the first claim; a stale renewal clears the claim, and after the horizon the lease expires and a later drain redelivers it under a new claim;
+- retry a `retryable` delivery, or an extension timeout or crash, with backoff from `poll_min` to `poll_max` while renewable; `delivered`, `rejected`, and protocol or validation failures (`undeliverable`) stop delivery for that claim, which still renews until the horizon;
+- run a pump-only activation pass for the owner without draining or changing the main claim; pump failures are logged and non-fatal.
+
+Delivery outcomes are advisory and never mutate notification state. SIGINT or SIGTERM stops the process without acknowledging, releasing, or renewing anything further. Events are written as tab-separated lines, or one JSON object per event with `--json-log`; logs omit claim tokens.
+
+### `driver.delivery` v1
+
+The manifest must declare exactly `{"name": "driver.delivery", "version": 1, "operations": ["deliver"]}` under the configured `extension_id`. The strict request payload carries:
+
+- `driver`: the owner `id` and watcher `generation`;
+- `notification`: `notification_id`, canonical `kind` (`subdriver-*`, never `coordinator-*`), `request_id`, `subdriver_id`, `subdriver_repo_name`, `subdriver_event_id`, `task_id`, `task_title`, `attempt_id`, `artifact`, `payload` truncated at 8 KiB on a UTF-8 boundary with `payload_truncated`, and `created_at`. A sub-driver return has no task identity; a task-backed notification has no sub-driver identity;
+- `claim`: `claim_token`, current `claim_until`, and the 1-based `delivery_attempt` for this claim;
+- `commands`: exact argument vectors beginning with bare `shephrd`. Sub-driver returns get `subdriver event`, `subdriver request`, and `subdriver reply ... --driver-id <owner>`; task-backed notifications get `task inspect` and `worker send` with no `request`. Every delivery gets `wake ack --claim-token <token> --driver-id <owner> --json`. `<text>` and `<key>` are literal placeholders the consumer fills;
+- `obligations`: an optional owner-scoped schema 2 count snapshot taken at claim time.
+
+The response is `{"outcome": "delivered" | "retryable" | "rejected", "detail": "<at most 512 bytes>"}`. Core validates the request before invocation and the result after it, with a 10-second deadline per attempt.
+
+The first-party `shephrd-delivery-webhook` extension (`shephrd.delivery-webhook`) posts the validated payload as JSON. It signs with [Standard Webhooks](https://www.standardwebhooks.com/) headers: `webhook-id` is the hex SHA-256 of `notification_id + ":" + claim_token`, so retries of one claim deduplicate while a redelivered claim is distinct and the raw token never appears in a header; `webhook-signature` is `v1,<base64 HMAC-SHA256 of "{id}.{timestamp}.{body}">`. Its command takes `--url`, `--secret-file`, and optional `--allow-http`. The URL must be HTTPS unless plain HTTP is explicitly allowed, and must not carry credentials. The secret file must be an absolute, non-symlinked regular file owned by the current user with mode 0600 or stricter; a `whsec_` value is base64-decoded into the key, and any other value is used as raw bytes. 2xx maps to `delivered`; 408, 429, 5xx, timeout, or connection failure to `retryable`; any other status, including an unfollowed redirect, to `rejected`. Bodies are bounded, response reads are capped, proxies and redirects are not used, and the detail never echoes receiver output.
+
+The receiving driver treats every field as untrusted data, handles the notification, and runs the `ack` vector only as the final step of its successful settled handling turn. Acknowledgement means handled, not answered; later answers use the `reply` vector. It never drains, pumps, or renews for an owner with an active watcher. Delivery is at least once: crashes, expiry, and the horizon redeliver under a new claim, so consumers should deduplicate on `webhook-id`.
+
+`internal/wakewatch` tests the loop against a real store with fake activation and delivery plus timing-out and crashing pinned extensions; `internal/driverdelivery` covers the strict contract, manifest, digest pin and environment allowlist; `internal/driverdelivery/webhook` covers the Standard Webhooks signature vector, `webhook-id`, status mapping, settings, bounds and redirects. `internal/cli/wake_watch_e2e_test.go` runs the built CLI and webhook extension against an isolated database and a loopback receiver for refusals, signed single-claim FIFO delivery, owner exclusivity, pump-only activation, consumer acknowledgement, retry, horizon redelivery and SIGTERM. These are deterministic fixtures, not a live watcher activation.
+
 ## State transitions
 
 Task adoption retargets pending and claimed notifications, releases old claims, and does not acknowledge them. Retry, stop, stale attempt/run identity, and most releases can supersede notifications. An unhandled `settled` notification survives release only while actionable residue independent of that notification remains; claim, renewal, acknowledgement, and adoption keep their existing fences. A current accepted report `done` notification backed by complete report landing proof remains active after report worktree release, including while a handler invocation is still `pending` or `invoking`, so the result is not lost before recovery and handling. Report result presentation still waits for `succeeded`, `failed`, or `unknown`, which are visible terminal presentation states.
@@ -67,6 +100,8 @@ Expired, ambiguous, mismatched, wrong-owner, wrong-generation, wrong-token, or c
 
 When a watcher turn aborts or fails, its claim remains durable for renewal or expiry. An expired claim's recovery command performs a fresh owner drain. If the current inferred Pi driver differs from the stored owner, the recovery command explicitly adopts the task and drains again; identity inference never performs adoption. Without a watcher, do not loop or sleep after an empty drain. When recovering work under a replacement driver, use `task obligations --all-drivers` and `plan ls --all-drivers` to discover it, then adopt each relevant task and plan explicitly when authorized. Neither disclosure command mutates ownership.
 
+A `wake watch` crash or restart takes a new generation; its outstanding claim expires and is reclaimed by the next drain, and the lock prevents overlap. A digest mismatch or manifest violation refuses startup; a later protocol violation marks only that claim undeliverable.
+
 Best-effort macOS hints can fail, time out, be cancelled, deduplicate, or rate-limit without changing durable notification state. Failures remain bounded delivery-log evidence. Default and disabled configurations start no notification extension.
 
 ## Safety invariants
@@ -75,7 +110,8 @@ Best-effort macOS hints can fail, time out, be cancelled, deduplicate, or rate-l
 - A claim is presentation authority only, not task authority.
 - Acknowledgement and desktop presentation record handling evidence, not approval, verification, landing, release, retry, or closure.
 - Only the current owner can claim, renew, or acknowledge.
-- An active watcher and manual drain must not compete.
+- An active watcher and manual drain must not compete. A `wake watch` owner lock makes `wake drain`, `wake pump`, and a second watcher for that owner fail closed.
+- `wake watch` holds one main claim at a time, never acknowledges, and settles on stored notification state; delivery outcomes are advisory.
 - One main claim blocks further main drains, not bounded sub-driver activation; pump-only passes do not consume main notifications.
 - Empty drains return immediately and consumers do not poll.
 - Obligations is a recorded-state projection and performs no Git, GitHub, process, terminal, file, or workspace mutation.
@@ -91,6 +127,7 @@ Best-effort macOS hints can fail, time out, be cancelled, deduplicate, or rate-l
 
 - `shephrd wake drain`
 - `shephrd wake pump --driver-id <main-owner>` (bounded activation only; no main notification consumption)
+- `shephrd wake watch --driver-id <main-owner> [--json-log]` (long-running non-Pi delivery watcher)
 - `shephrd wake renew --claim-token <token>`
 - `shephrd wake ack --claim-token <token>`
 - `shephrd wake renew [notification-id] --claim-token <token> [--driver-id <id>] [--driver-generation <generation>]`

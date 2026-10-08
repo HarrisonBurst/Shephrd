@@ -20,6 +20,7 @@ import (
 	"shephrd/internal/process"
 	"shephrd/internal/repository"
 	"shephrd/internal/store"
+	"shephrd/internal/wakewatch"
 )
 
 const standaloneAnnotation = "shephrd.io/standalone"
@@ -760,6 +761,11 @@ func wakeCommand(get func() *application) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			release, err := wakewatch.Guard(get().config.DataDir, driver)
+			if err != nil {
+				return err
+			}
+			defer release()
 			if err := get().control.PumpSubdrivers(driver); err != nil {
 				return err
 			}
@@ -798,6 +804,11 @@ func wakeCommand(get func() *application) *cobra.Command {
 			if driverID == "" {
 				return fmt.Errorf("--driver-id is required when no current Pi driver or wake.driver_id is configured")
 			}
+			release, err := wakewatch.Guard(get().config.DataDir, driverID)
+			if err != nil {
+				return err
+			}
+			defer release()
 			if driverGeneration == "" {
 				driverGeneration = store.NewID("generation")
 			}
@@ -835,7 +846,7 @@ func wakeCommand(get func() *application) *cobra.Command {
 	drain.Flags().StringVar(&driverID, "driver-id", "", "Stable consumer identity")
 	drain.Flags().StringVar(&driverGeneration, "driver-generation", "", "Consumer session generation")
 	drain.Flags().DurationVar(&claimTTL, "claim-ttl", 0, "Claim lease duration")
-	command.AddCommand(drain)
+	command.AddCommand(drain, watchCommand(get))
 
 	var ackToken, ackDriverID, ackGeneration, handlingID string
 	ack := &cobra.Command{

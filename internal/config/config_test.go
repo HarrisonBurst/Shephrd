@@ -208,3 +208,55 @@ func TestWorktreeBackendKeyIsRetired(t *testing.T) {
 		})
 	}
 }
+
+func TestWakeWatchConfiguration(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	delivery := "[wake_watch.delivery]\nextension_id = \"shephrd.delivery-webhook\"\ncommand = [\"/opt/shephrd-delivery-webhook\", \"--url\", \"https://receiver.example/hook\"]\nsha256 = \"" + digest + "\"\n"
+	for _, test := range []struct {
+		name    string
+		body    string
+		min     time.Duration
+		max     time.Duration
+		horizon time.Duration
+		valid   bool
+	}{
+		{name: "fresh", min: 2 * time.Second, max: 30 * time.Second, horizon: 30 * time.Minute, valid: true},
+		{name: "explicit minimum", body: "[wake_watch]\npoll_min = \"45s\"\n", min: 45 * time.Second, max: 45 * time.Second, horizon: 30 * time.Minute, valid: true},
+		{name: "delivery", body: "[wake_watch]\nrenew_horizon = \"5m\"\n" + delivery + "environment = [\"HOME\"]\n", min: 2 * time.Second, max: 30 * time.Second, horizon: 5 * time.Minute, valid: true},
+		{name: "inverted bounds", body: "[wake_watch]\npoll_min = \"5s\"\npoll_max = \"1s\"\n"},
+		{name: "zero horizon", body: "[wake_watch]\nrenew_horizon = \"0s\"\n"},
+		{name: "relative command", body: strings.Replace(delivery, "/opt/shephrd-delivery-webhook", "shephrd-delivery-webhook", 1)},
+		{name: "invalid digest", body: strings.Replace(delivery, digest, "ABC", 1)},
+		{name: "invalid identity", body: strings.Replace(delivery, "shephrd.delivery-webhook", "Delivery", 1)},
+		{name: "shephrd environment", body: delivery + "environment = [\"SHEPHRD_CONFIG\"]\n"},
+		{name: "unknown key", body: delivery + "url = \"https://receiver.example\"\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "config.toml")
+			t.Setenv("SHEPHRD_CONFIG", path)
+			t.Setenv("SHEPHRD_STATE_DIR", filepath.Join(root, "state"))
+			t.Setenv("SHEPHRD_DATA_DIR", filepath.Join(root, "data"))
+			if test.body != "" {
+				if err := os.WriteFile(path, []byte(test.body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 2 {
+				cfg, err := Load()
+				if !test.valid {
+					if err == nil {
+						t.Fatalf("invalid configuration accepted: %+v", cfg.WakeWatch)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if cfg.WakeWatch.PollMin != test.min || cfg.WakeWatch.PollMax != test.max || cfg.WakeWatch.RenewHorizon != test.horizon || (cfg.WakeWatch.Delivery != nil) != strings.Contains(test.body, "delivery") {
+					t.Fatalf("wake_watch = %+v", cfg.WakeWatch)
+				}
+			}
+		})
+	}
+}

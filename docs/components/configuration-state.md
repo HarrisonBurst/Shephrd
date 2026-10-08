@@ -87,6 +87,23 @@ sha256 = "64-lowercase-hex-digits"
 
 Enabling notifications requires this exact small trust shape. Omitting the extension or leaving notifications disabled launches no notification process. The retired `adapter` key is rejected rather than aliased. Core retains durable records, presentation eligibility, bounded title/body construction, deduplication, rate limiting, invocation timing, and delivery logs. The extension receives only the sanitized title and body and returns a non-authoritative presentation result.
 
+The driver-agnostic [`wake watch`](notifications-watchers.md#driver-agnostic-watcher) cadence and its delivery extension are configured separately from the Pi watcher:
+
+```toml
+[wake_watch]
+poll_min = "2s"
+poll_max = "30s"
+renew_horizon = "30m"
+
+[wake_watch.delivery]
+extension_id = "shephrd.delivery-webhook"
+command = ["/absolute/path/to/shephrd-delivery-webhook", "--url", "https://receiver.example/webhooks/shephrd", "--secret-file", "/absolute/path/to/secret"]
+sha256 = "64-lowercase-hex-digits"
+environment = []
+```
+
+`poll_min` must be positive, `poll_max` defaults to at least `poll_min` and may not be lower, and `renew_horizon` must be positive and at most 24 hours. The claim lease remains `wake.claim_ttl` within its existing bounds. The delivery table follows the lifecycle handler trust shape: a valid `extension_id`, an absolute command vector of at most 16 arguments run without a shell or `PATH` lookup, a pinned digest checked before every launch, and at most 16 allowlisted environment names excluding `SHEPHRD_*`, `LD_*`, and `DYLD_*`. Without the table `wake watch` refuses to start, and no other command launches the delivery extension.
+
 The first-party Herdr and cmux process extensions are explicit global opt-ins:
 
 ```toml

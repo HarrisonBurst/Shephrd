@@ -224,7 +224,7 @@ func TestGeneratedCommandManifestMatchesCurrentContract(t *testing.T) {
 		"shephrd protocol", "shephrd protocol validate",
 		"shephrd repo", "shephrd repo add", "shephrd repo context", "shephrd repo list", "shephrd repo scan",
 		"shephrd task", "shephrd task adopt", "shephrd task annotate", "shephrd task annotations", "shephrd task archive", "shephrd task attest-delivery", "shephrd task attest-report-recovery", "shephrd task create", "shephrd task inspect", "shephrd task list", "shephrd task obligations", "shephrd task verify-delivery",
-		"shephrd wake", "shephrd wake ack", "shephrd wake drain", "shephrd wake pump", "shephrd wake renew", "shephrd worker", "shephrd worker focus", "shephrd worker intent", "shephrd worker intent clear", "shephrd worker peek", "shephrd worker relaunch", "shephrd worker retry", "shephrd worker send", "shephrd worker spawn", "shephrd worker status", "shephrd worker stop", "shephrd workspace", "shephrd workspace reconcile", "shephrd workspace release",
+		"shephrd wake", "shephrd wake ack", "shephrd wake drain", "shephrd wake pump", "shephrd wake renew", "shephrd wake watch", "shephrd worker", "shephrd worker focus", "shephrd worker intent", "shephrd worker intent clear", "shephrd worker peek", "shephrd worker relaunch", "shephrd worker retry", "shephrd worker send", "shephrd worker spawn", "shephrd worker status", "shephrd worker stop", "shephrd workspace", "shephrd workspace reconcile", "shephrd workspace release",
 	}
 	sort.Strings(wantVisible)
 	wantHidden := []string{"shephrd _claude-hook", "shephrd _run", "shephrd subdriver _run"}
@@ -245,6 +245,7 @@ func TestGeneratedCommandManifestMatchesCurrentContract(t *testing.T) {
 		"plan adopt":        {"driver-id", "new-driver-id"},
 		"worker retry":      {"harness", "model", "runtime"},
 		"workspace release": {"attempt", "discard"},
+		"wake watch":        {"driver-id", "json-log"},
 	} {
 		command, _, err := root.Find(strings.Fields(path))
 		if err != nil {

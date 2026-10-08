@@ -44,7 +44,7 @@ Handle a waiting question with `shephrd worker send <task-id> "<answer>" --json`
 
 After dispatch, remain available asynchronously for the user and worker follow-ups. Do not wait, poll, or duplicate worker work.
 
-While the Pi watcher is active, it owns delivery and acknowledgement. Do not sleep, poll status, manually drain notifications, or keep a turn open waiting for a worker. The watcher acknowledges the matching successful settled handling turn, not completion of a workflow.
+An active watcher owns delivery; only the Pi one acknowledges. Do not sleep, poll status, manually drain notifications, or keep a turn open waiting for a worker. The Pi watcher acknowledges the matching successful settled handling turn, not completion of a workflow.
 
 Without a watcher, perform at most one bounded pass at a normal turn boundary; handle each claimed record before acknowledging, and never loop:
 
@@ -76,6 +76,6 @@ Use `shephrd --help` or `shephrd <command> --help` for uncommon or version-speci
 Load only the reference needed for the current operation, not all references at session start or after compaction:
 
 - [Driver guidance](references/driver-policy.md): scope and guidance sources.
-- [Recovery and ownership](references/recovery.md): replacement drivers, annotations, retry, relaunch, and manual claim renewal.
+- [Recovery and ownership](references/recovery.md): replacement drivers, annotations, retry, relaunch, and manual and watched claims.
 - [Delivery and release](references/delivery.md): verification, attestation, exceptional report recovery, and cleanup.
 - [Plans and reports](references/plans.md): optional persistent planning and immutable evidence handoffs.
