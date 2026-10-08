@@ -98,6 +98,7 @@ func Capability() extensionhost.Capability {
 
 func NewRequest(notification model.DriverNotification, generation string, attempt int, obligations *Obligations) Request {
 	payload, truncated := truncateUTF8(strings.ToValidUTF8(notification.Payload, ""), MaxPayloadBytes)
+	repoName, _ := truncateUTF8(strings.ToValidUTF8(notification.SubdriverRepoName, ""), MaxFieldBytes)
 	artifact := notification.Artifact
 	if len(artifact) > MaxFieldBytes || !utf8.ValidString(artifact) {
 		artifact = ""
@@ -106,7 +107,7 @@ func NewRequest(notification model.DriverNotification, generation string, attemp
 		Driver: Driver{ID: notification.ClaimOwner, Generation: generation},
 		Notification: Notification{
 			NotificationID: notification.NotificationID, Kind: notification.Kind, RequestID: notification.RequestID,
-			SubdriverID: notification.SubdriverID, SubdriverRepoName: notification.SubdriverRepoName, SubdriverEventID: notification.SubdriverEventID,
+			SubdriverID: notification.SubdriverID, SubdriverRepoName: repoName, SubdriverEventID: notification.SubdriverEventID,
 			TaskID: notification.TaskID, AttemptID: notification.AttemptID, Artifact: artifact,
 			Payload: payload, PayloadTruncated: truncated, CreatedAt: notification.CreatedAt.UTC(),
 		},

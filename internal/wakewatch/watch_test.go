@@ -575,6 +575,82 @@ func TestWatcherCancellationDuringDrainActivationClaimsNothing(t *testing.T) {
 	}
 }
 
+type deliverFunc func(context.Context, driverdelivery.Request) (driverdelivery.Result, error)
+
+func (f deliverFunc) Deliver(ctx context.Context, request driverdelivery.Request) (driverdelivery.Result, error) {
+	return f(ctx, request)
+}
+
+func TestWatcherCancellationDuringRetryDeliveryStartsNoActivationPass(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		inFlight bool
+	}{{name: "no pass in flight"}, {name: "in-flight pass", inFlight: true}} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t)
+			id := f.subdriverReturn("question")
+			r := &recorder{}
+			held := 2
+			if test.inFlight {
+				held = 3
+			}
+			var gate chan struct{}
+			inFlight := make(chan struct{})
+			deliverer := deliverFunc(func(ctx context.Context, request driverdelivery.Request) (driverdelivery.Result, error) {
+				if _, err := r.Deliver(ctx, request); err != nil {
+					return driverdelivery.Result{}, err
+				}
+				if request.Claim.DeliveryAttempt == held {
+					close(inFlight)
+					<-ctx.Done()
+					return driverdelivery.Result{}, ctx.Err()
+				}
+				if request.Claim.DeliveryAttempt == 2 {
+					gate = r.block()
+				}
+				return driverdelivery.Result{Outcome: driverdelivery.OutcomeRetryable, Detail: "HTTP 503"}, nil
+			})
+			watcher := Watcher{Store: f.state, Activation: r, Deliverer: deliverer, DriverID: owner, Generation: "watch:cancel",
+				ClaimTTL: time.Minute, PollMin: 20 * time.Millisecond, PollMax: 40 * time.Millisecond, RenewHorizon: time.Hour,
+				DeliveryTimeout: 5 * time.Second, Log: r.log}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				watcher.Run(ctx)
+				close(done)
+			}()
+			<-inFlight
+			if test.inFlight {
+				eventually(t, "slow activation pass", func() bool { blocked, _ := r.pumpState(); return blocked == 1 })
+			}
+			sweeps, pumps := r.counts()
+			cancel()
+			if test.inFlight {
+				select {
+				case <-done:
+					t.Fatal("watcher stopped while an activation pass was in flight")
+				case <-time.After(150 * time.Millisecond):
+				}
+				close(gate)
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("watcher did not stop")
+			}
+			if current, currentPumps := r.counts(); current != sweeps || currentPumps != pumps || len(r.delivered()) != held || r.eventCount("stopped") != 1 {
+				t.Fatalf("watcher activated after cancellation: sweeps %d -> %d, pumps %d -> %d, deliveries %d, events %+v", sweeps, current, pumps, currentPumps, len(r.delivered()), r.events)
+			}
+			if blocked, overlap := r.pumpState(); blocked != 0 || overlap || r.eventCount(driverdelivery.OutcomeRetryable) != held-1 {
+				t.Fatalf("blocked %d, overlap %v, events %+v", blocked, overlap, r.events)
+			}
+			if notice := f.notification(id); notice.State != model.NotificationClaimed || notice.AckedAt != nil || notice.ClaimToken != r.delivered()[0].Claim.ClaimToken {
+				t.Fatalf("notification = %+v", notice)
+			}
+		})
+	}
+}
+
 func TestWatcherWithholdsDeliveryWhenRenewalFails(t *testing.T) {
 	for _, test := range []struct {
 		name  string

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -67,6 +68,19 @@ func TestNewRequestBoundsLongTitlesAndOmitsOversizedArtifacts(t *testing.T) {
 			if request.Notification.Artifact != "" || !slices.Equal(request.Commands.Ack, []string{"shephrd", "wake", "ack", "--claim-token", "token", "--driver-id", "driver:hermes", "--json"}) {
 				t.Fatalf("oversized artifact or identity changed: %+v", request)
 			}
+			reference := subdriverReturn("demo")
+			subdriver := subdriverReturn(title)
+			if err := ValidateRequest(subdriver); err != nil {
+				t.Fatal(err)
+			}
+			repoName := subdriver.Notification.SubdriverRepoName
+			if len(repoName) > MaxFieldBytes || len(repoName) < MaxFieldBytes-utf8.UTFMax || !utf8.ValidString(repoName) || !strings.HasPrefix(strings.ToValidUTF8(title, ""), repoName) {
+				t.Fatalf("repo name = %q (%d bytes)", repoName, len(repoName))
+			}
+			subdriver.Notification.SubdriverRepoName = reference.Notification.SubdriverRepoName
+			if !reflect.DeepEqual(subdriver, reference) {
+				t.Fatalf("sub-driver request changed beyond the repo name: %+v", subdriver)
+			}
 		})
 	}
 	artifact := "branch:shephrd/task_1"
@@ -74,6 +88,20 @@ func TestNewRequestBoundsLongTitlesAndOmitsOversizedArtifacts(t *testing.T) {
 	if request.Notification.TaskTitle != "Fix it" || request.Notification.Artifact != artifact {
 		t.Fatalf("bounded fields changed: %+v", request.Notification)
 	}
+	for _, name := range []string{"demo", strings.Repeat("r", MaxFieldBytes)} {
+		if got := subdriverReturn(name).Notification.SubdriverRepoName; got != name {
+			t.Fatalf("repo name = %q, want %q", got, name)
+		}
+	}
+}
+
+func subdriverReturn(repoName string) Request {
+	until := time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC)
+	return NewRequest(model.DriverNotification{
+		NotificationID: "wake:1", Kind: "subdriver-question", RequestID: "request_1", SubdriverID: "subdriver_1",
+		SubdriverRepoName: repoName, SubdriverEventID: 42, Payload: "Which format?",
+		CreatedAt: until.Add(-time.Minute), ClaimOwner: "driver:hermes", ClaimToken: "token", ClaimUntil: &until,
+	}, "watch:1", 1, nil)
 }
 
 func TestValidateRequestRejectsConflictingOrUnboundedFields(t *testing.T) {

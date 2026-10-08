@@ -311,7 +311,7 @@ func TestWakeWatchBuiltCLIDeliversSignedClaimsWithOwnerExclusivity(t *testing.T)
 	}
 }
 
-func TestWakeWatchBuiltCLIRestartWaitsForOutstandingClaimAndDeliversLongTitles(t *testing.T) {
+func TestWakeWatchBuiltCLIRestartWaitsForOutstandingClaimAndDeliversLongTitlesAndRepoNames(t *testing.T) {
 	root := t.TempDir()
 	binary, extension := buildWakeWatchBinaries(t, root)
 	receiver := startWakeWatchReceiver(t, root)
@@ -381,6 +381,45 @@ func TestWakeWatchBuiltCLIRestartWaitsForOutstandingClaimAndDeliversLongTitles(t
 		t.Fatalf("fixture returns = %v", returns)
 	}
 	run("repo", "add", repoRoot, "--name", "titles", "--json")
+	namedRoot := filepath.Join(root, "named")
+	if err := os.MkdirAll(namedRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contextGit(t, namedRoot, "init", "-b", "main")
+	contextGit(t, namedRoot, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
+	longName := strings.Repeat("長いリポジトリ名", 50)
+	var named model.Repo
+	if err := json.Unmarshal(run("repo", "add", namedRoot, "--name", longName, "--json"), &named); err != nil {
+		t.Fatal(err)
+	}
+	if named.Name != longName {
+		t.Fatalf("repo name = %d bytes, want %d", len(named.Name), len(longName))
+	}
+	namedRequest, err := state.HandoffSubdriver(named.ID, "", owner, "named", "Named repository request", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	namedFence, err := state.ReserveSubdriver(namedRequest.SubdriverID, 0, "pi", "fixture", "headless")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.StartSubdriver(namedFence, 0, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	namedEvent, err := state.SubdriverReturn(namedFence, namedRequest.ID, "return", "question", "Named question?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var namedReturn string
+	notifications, err := state.Notifications("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, notification := range notifications {
+		if notification.SubdriverEventID == namedEvent.ID {
+			namedReturn = notification.NotificationID
+		}
+	}
 	titles := []string{strings.Repeat("Long explicit title ", 60), strings.Repeat("長いタイトル", 70)}
 	var tasks []model.Task
 	var questions []string
@@ -506,7 +545,13 @@ func TestWakeWatchBuiltCLIRestartWaitsForOutstandingClaimAndDeliversLongTitles(t
 		t.Fatalf("redelivered = %+v", redelivered.request)
 	}
 	ack(redelivered)
-	previous := redelivered
+	namedDelivery := receiver.next("long repository name return")
+	repoName := namedDelivery.request.Notification.SubdriverRepoName
+	if namedDelivery.request.Notification.NotificationID != namedReturn || len(repoName) > 1024 || len(repoName) < 1000 || !utf8.ValidString(repoName) || !strings.HasPrefix(longName, repoName) {
+		t.Fatalf("long repository name delivery = %q (%d bytes)", repoName, len(repoName))
+	}
+	ack(namedDelivery)
+	previous := namedDelivery
 	for index, task := range tasks {
 		delivery := receiver.next(fmt.Sprintf("long title %d", index))
 		title := delivery.request.Notification.TaskTitle
@@ -519,9 +564,9 @@ func TestWakeWatchBuiltCLIRestartWaitsForOutstandingClaimAndDeliversLongTitles(t
 		ack(delivery)
 		previous = delivery
 	}
-	waitFor(t, "final acknowledgement observed", func() bool { return strings.Count(log.String(), `"event":"acknowledged"`) == 3 })
+	waitFor(t, "final acknowledgement observed", func() bool { return strings.Count(log.String(), `"event":"acknowledged"`) == 4 })
 	stop(watch, log, exited)
-	for _, id := range append(returns, questions...) {
+	for _, id := range append(append(returns, namedReturn), questions...) {
 		if notice, err := state.Notification(id); err != nil || notice.State != model.NotificationAcknowledged {
 			t.Fatalf("notification %s = %+v %v", id, notice, err)
 		}
@@ -841,6 +886,133 @@ func TestWakeWatchBuiltCLIStopsWithoutClaimingWhenSignalledDuringDrainActivation
 	stop(watch, log, exited)
 }
 
+func TestWakeWatchBuiltCLIStopsWithoutActivatingWhenSignalledDuringRetryDelivery(t *testing.T) {
+	root := t.TempDir()
+	binary, extension := buildWakeWatchBinaries(t, root)
+	terminalExtension := filepath.Join(root, "herdr")
+	build := exec.Command("go", "build", "-o", terminalExtension, "./internal/terminal/testdata/herdrextension")
+	build.Dir = "../.."
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build terminal fixture: %s %v", output, err)
+	}
+	receiver := startWakeWatchReceiver(t, root, http.StatusServiceUnavailable, 0)
+	database := filepath.Join(root, "state.db")
+	operations := filepath.Join(root, "operations")
+	config := fmt.Sprintf("database_path = %q\ndata_dir = %q\nworktree_root = %q\n[memory]\nenabled = false\n[wake]\nclaim_ttl = \"30s\"\nclaim_ttl_min = \"30s\"\n[wake_watch]\npoll_min = \"100ms\"\npoll_max = \"200ms\"\nrenew_horizon = \"30m\"\n[wake_watch.delivery]\nextension_id = \"shephrd.delivery-webhook\"\ncommand = [%q, \"--url\", %q, \"--secret-file\", %q, \"--allow-http\"]\nsha256 = %q\n[terminal_extensions.herdr]\ncommand = [%q, %q, %q]\nsha256 = %q\n",
+		database, filepath.Join(root, "data"), filepath.Join(root, "worktrees"), extension, receiver.url+"/hook", receiver.secret, fixtureDigest(t, extension), terminalExtension, operations, binary, fixtureDigest(t, terminalExtension))
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := compoundCLIEnvironment(os.Environ(), map[string]string{
+		"SHEPHRD_CONFIG": filepath.Join(root, "config.toml"), "SHEPHRD_WORKER": "", "PI_SESSION_ID": "",
+		"SHEPHRD_SUBDRIVER_ID": "", "SHEPHRD_SUBDRIVER_GENERATION": "", "SHEPHRD_SUBDRIVER_TOKEN": "",
+		"SHEPHRD_COORDINATOR_ID": "", "SHEPHRD_COORDINATOR_GENERATION": "", "SHEPHRD_COORDINATOR_TOKEN": "",
+	})
+
+	const owner = "driver:hermes"
+	state, err := store.Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { state.Close() })
+	idle, err := state.HandoffSubdriver("", "Retry activation fixture", owner, "idle", "Idle request", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idleFence, err := state.ReserveSubdriver(idle.SubdriverID, 0, "pi", "fixture", "herdr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetSubdriverEndpoint(idleFence, model.TerminalEndpoint{Backend: "herdr", SocketPath: "/socket", WorkspaceID: "w7", TabID: "w7:t2", PaneID: "w7:p2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.StartSubdriver(idleFence, 0, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := state.SubdriverPage(idleFence.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range page.Events {
+		if err := state.HandleSubdriverEvent(idleFence, event.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := state.FinishSubdriver(idleFence, "retained", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(operations+".absent", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request, err := state.HandoffSubdriver("", "Retry activation fixture", owner, "question", "Question request", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence, err := state.ReserveSubdriver(request.SubdriverID, 0, "pi", "fixture", "headless")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.StartSubdriver(fence, 0, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.SubdriverReturn(fence, request.ID, "return", "question", "Question?"); err != nil {
+		t.Fatal(err)
+	}
+
+	watch := exec.Command(binary, "wake", "watch", "--driver-id", owner, "--json-log")
+	watch.Env = environment
+	var watchLog lockedBuffer
+	watch.Stdout, watch.Stderr = &watchLog, &watchLog
+	if err := watch.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- watch.Wait() }()
+	t.Cleanup(func() {
+		if watch.ProcessState == nil {
+			_ = watch.Process.Kill()
+			<-exited
+		}
+	})
+	probes := func() int {
+		t.Helper()
+		body, err := os.ReadFile(operations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(body), "process_info\n")
+	}
+
+	first := receiver.next("retryable delivery")
+	retry := receiver.next("retry delivery in flight")
+	if retry.id != first.id || retry.request.Claim.DeliveryAttempt != 2 {
+		t.Fatalf("first = %+v, retry = %+v", first.request, retry.request)
+	}
+	before := probes()
+	if err := watch.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("watcher exit: %v\n%s", err, watchLog.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("watcher did not stop after SIGTERM")
+	}
+	if after := probes(); after != before {
+		t.Fatalf("activation probes across SIGTERM during retry delivery = %d -> %d\n%s", before, after, watchLog.String())
+	}
+	receiver.none("delivery after SIGTERM during retry delivery", 500*time.Millisecond)
+	outstanding, err := state.Notification(first.request.Notification.NotificationID)
+	if err != nil || outstanding.State != model.NotificationClaimed || outstanding.ClaimToken != first.request.Claim.ClaimToken || outstanding.AckedAt != nil {
+		t.Fatalf("SIGTERM changed the outstanding claim: %+v %v", outstanding, err)
+	}
+	if log := watchLog.String(); strings.Count(log, `"event":"retryable"`) != 1 || strings.Contains(log, `"event":"delivered"`) || !strings.Contains(log, `"event":"stopped"`) {
+		t.Fatalf("watcher log = %s", log)
+	}
+}
+
 type wakeWatchReceiver struct {
 	t          *testing.T
 	url        string
@@ -869,6 +1041,10 @@ func startWakeWatchReceiver(t *testing.T, root string, statuses ...int) *wakeWat
 			status, statuses = statuses[0], statuses[1:]
 		}
 		mu.Unlock()
+		if status == 0 {
+			<-request.Context().Done()
+			return
+		}
 		writer.WriteHeader(status)
 	}))
 	t.Cleanup(server.Close)

@@ -160,7 +160,7 @@ func (w *Watcher) tick(ctx context.Context, current *claim) bool {
 	if deliver {
 		w.deliver(ctx, current)
 	}
-	if w.finishPump(false) {
+	if ctx.Err() == nil && w.finishPump(false) {
 		pumping := make(chan error, 1)
 		w.pumping = pumping
 		go func() { pumping <- w.Activation.PumpSubdrivers(w.DriverID) }()
