@@ -66,9 +66,9 @@ With no outstanding claim the watcher performs the same pass as `wake drain`: sw
 - read the stored notification and settle on stored state rather than renewal errors; if the read fails the watcher logs `observe_failed` and skips that pass entirely, neither renewing, delivering, pumping, nor draining until stored state is observable again: `acknowledged` under its claim identity drains the next notification immediately; `superseded`, reclaimed `pending`, a changed owner/generation/token, or an expired lease clears the claim without acknowledgement;
 - renew the exact claim on the Pi watcher's cadence, half the remaining lease bounded to 1-60 seconds, until `wake_watch.renew_horizon` after the first claim; a stale renewal clears the claim, any other renewal failure withholds delivery until a later pass re-reads stored state, and after the horizon the lease expires and a later drain redelivers it under a new claim;
 - retry a `retryable` delivery, or an extension timeout or crash, with backoff from `poll_min` to `poll_max` while renewable; `delivered`, `rejected`, and protocol or validation failures (`undeliverable`) stop delivery for that claim, which still renews until the horizon;
-- run a pump-only activation pass for the owner without draining or changing the main claim; pump failures are logged and non-fatal.
+- start a pump-only activation pass for the owner in the background when none is in flight, without draining or changing the main claim, so a slow pass never delays observation, renewal or delivery; at most one pass runs at a time, the next drain waits for an in-flight pass before its own, and pump failures are logged and non-fatal.
 
-Delivery outcomes are advisory and never mutate notification state. SIGINT or SIGTERM stops the process without acknowledging, releasing, or renewing anything further. Events are written as tab-separated lines, or one JSON object per event with `--json-log`; logs omit claim tokens.
+Delivery outcomes are advisory and never mutate notification state. SIGINT or SIGTERM stops the process after any in-flight activation pass finishes, without acknowledging, releasing, or renewing anything further. Events are written as tab-separated lines, or one JSON object per event with `--json-log`; logs omit claim tokens.
 
 ### `driver.delivery` v1
 

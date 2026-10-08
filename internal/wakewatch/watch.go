@@ -49,6 +49,7 @@ type Watcher struct {
 	RenewHorizon    time.Duration
 	DeliveryTimeout time.Duration
 	Log             func(Event)
+	pumping         chan error
 }
 
 type claim struct {
@@ -87,10 +88,12 @@ func (w *Watcher) Run(ctx context.Context) {
 			break
 		}
 	}
+	w.finishPump(true)
 	w.log(Event{Event: "stopped", DriverID: w.DriverID, Generation: w.Generation, Detail: "no claim was acknowledged or released; outstanding claims expire for redelivery"})
 }
 
 func (w *Watcher) drain() *claim {
+	w.finishPump(true)
 	if err := w.Activation.SweepDeaths(); err != nil {
 		w.log(Event{Event: "drain_failed", Detail: err.Error()})
 		return nil
@@ -151,7 +154,30 @@ func (w *Watcher) tick(ctx context.Context, current *claim) bool {
 	if deliver {
 		w.deliver(ctx, current)
 	}
-	if err := w.Activation.PumpSubdrivers(w.DriverID); err != nil {
+	if w.finishPump(false) {
+		pumping := make(chan error, 1)
+		w.pumping = pumping
+		go func() { pumping <- w.Activation.PumpSubdrivers(w.DriverID) }()
+	}
+	return true
+}
+
+func (w *Watcher) finishPump(wait bool) bool {
+	if w.pumping == nil {
+		return true
+	}
+	var err error
+	if wait {
+		err = <-w.pumping
+	} else {
+		select {
+		case err = <-w.pumping:
+		default:
+			return false
+		}
+	}
+	w.pumping = nil
+	if err != nil {
 		w.log(Event{Event: "pump_failed", Detail: err.Error()})
 	}
 	return true

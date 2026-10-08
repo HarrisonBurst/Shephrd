@@ -108,6 +108,9 @@ type recorder struct {
 	events   []Event
 	sweeps   int
 	pumps    int
+	gate     chan struct{}
+	blocked  int
+	overlap  bool
 }
 
 func (r *recorder) SweepDeaths() error {
@@ -124,7 +127,30 @@ func (r *recorder) PumpSubdrivers(driver string) error {
 		return fmt.Errorf("pump owner %s", driver)
 	}
 	r.pumps++
+	gate := r.gate
+	if gate == nil {
+		return nil
+	}
+	r.overlap = r.overlap || r.blocked > 0
+	r.blocked++
+	r.mu.Unlock()
+	<-gate
+	r.mu.Lock()
+	r.blocked--
 	return nil
+}
+
+func (r *recorder) block() chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gate = make(chan struct{})
+	return r.gate
+}
+
+func (r *recorder) pumpState() (int, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.blocked, r.overlap
 }
 
 func (r *recorder) Deliver(_ context.Context, request driverdelivery.Request) (driverdelivery.Result, error) {
@@ -424,6 +450,73 @@ func TestWatcherRenewsBeforeExpiryWhenPollMinExceedsTheRenewalInterval(t *testin
 	}
 	if len(r.delivered()) != 1 || r.eventCount("expired") != 0 {
 		t.Fatalf("claim was redelivered instead of renewed: deliveries %d, events %+v", len(r.delivered()), r.events)
+	}
+}
+
+func TestWatcherRenewsAndSettlesDuringSlowActivationWithoutOverlappingPumps(t *testing.T) {
+	f := newFixture(t)
+	first := f.subdriverReturn("first question")
+	second := f.subdriverReturn("second question")
+	r := &recorder{}
+	generation, _ := start(t, f, r, r, time.Hour)
+	eventually(t, "first delivery", func() bool { return len(r.delivered()) == 1 })
+	original := r.delivered()[0].Claim
+	gate := r.block()
+	eventually(t, "slow activation pass", func() bool { blocked, _ := r.pumpState(); return blocked == 1 })
+	sweeps, pumps := r.counts()
+	f.exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, time.Now().UTC().Add(1500*time.Millisecond).Format(time.RFC3339Nano), first)
+	eventually(t, "renewal during slow activation", func() bool { return r.eventCount("renewed") >= 1 })
+	if renewed := f.notification(first); renewed.State != model.NotificationClaimed || renewed.ClaimToken != original.ClaimToken || renewed.ClaimUntil == nil || time.Until(*renewed.ClaimUntil) < 30*time.Second {
+		t.Fatalf("renewed claim = %+v", renewed)
+	}
+	if _, err := f.state.AckNotification(model.NotificationAckRequest{NotificationID: first, ClaimToken: original.ClaimToken, ConsumerID: owner, DriverGeneration: generation, HandlingID: "handling:external"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "acknowledgement during slow activation", func() bool { return r.eventCount("acknowledged") == 1 })
+	time.Sleep(150 * time.Millisecond)
+	if current, currentPumps := r.counts(); current != sweeps || currentPumps != pumps || len(r.delivered()) != 1 || f.notification(second).State != model.NotificationPending {
+		t.Fatalf("watcher drained or pumped past the in-flight activation: sweeps %d -> %d, pumps %d -> %d, deliveries %d", sweeps, current, pumps, currentPumps, len(r.delivered()))
+	}
+	close(gate)
+	eventually(t, "second delivery after the activation pass", func() bool { return len(r.delivered()) == 2 })
+	if _, overlap := r.pumpState(); overlap || r.delivered()[1].Notification.NotificationID != second || r.eventCount("expired") != 0 {
+		t.Fatalf("overlap %v, second request = %+v, events = %+v", overlap, r.delivered()[1], r.events)
+	}
+}
+
+func TestWatcherCancellationWaitsForTheInFlightActivationPass(t *testing.T) {
+	f := newFixture(t)
+	id := f.subdriverReturn("question")
+	r := &recorder{}
+	watcher := Watcher{Store: f.state, Activation: r, Deliverer: r, DriverID: owner, Generation: "watch:cancel",
+		ClaimTTL: time.Minute, PollMin: 20 * time.Millisecond, PollMax: 40 * time.Millisecond, RenewHorizon: time.Hour,
+		DeliveryTimeout: 500 * time.Millisecond, Log: r.log}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		watcher.Run(ctx)
+		close(done)
+	}()
+	eventually(t, "delivery", func() bool { return len(r.delivered()) == 1 })
+	gate := r.block()
+	eventually(t, "slow activation pass", func() bool { blocked, _ := r.pumpState(); return blocked == 1 })
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("watcher stopped while an activation pass was in flight")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not stop after the activation pass finished")
+	}
+	if blocked, overlap := r.pumpState(); blocked != 0 || overlap || r.eventCount("stopped") != 1 {
+		t.Fatalf("blocked %d, overlap %v, events %+v", blocked, overlap, r.events)
+	}
+	if notice := f.notification(id); notice.State != model.NotificationClaimed || notice.AckedAt != nil {
+		t.Fatalf("notification = %+v", notice)
 	}
 }
 
