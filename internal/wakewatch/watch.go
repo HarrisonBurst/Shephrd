@@ -99,7 +99,7 @@ func (w *Watcher) drain() *claim {
 		w.log(Event{Event: "drain_failed", Detail: err.Error()})
 		return nil
 	}
-	result, err := w.Store.DrainNotifications("", w.DriverID, w.Generation, 1, w.ClaimTTL)
+	result, err := w.Store.DrainNotificationExclusive(w.DriverID, w.Generation, w.ClaimTTL)
 	if err != nil {
 		w.log(Event{Event: "drain_failed", Detail: err.Error()})
 		return nil

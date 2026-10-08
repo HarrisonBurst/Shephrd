@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"shephrd/internal/config"
 	extensionhost "shephrd/internal/extension"
@@ -48,6 +49,33 @@ func TestNewRequestEmitsExactCanonicalCommands(t *testing.T) {
 	}
 }
 
+func TestNewRequestBoundsLongTitlesAndOmitsOversizedArtifacts(t *testing.T) {
+	until := time.Now().Add(time.Minute)
+	for name, title := range map[string]string{"ascii": strings.Repeat("t", 1100), "multibyte": strings.Repeat("界", 400), "invalid": strings.Repeat("ab\xff", 600)} {
+		t.Run(name, func(t *testing.T) {
+			request := NewRequest(model.DriverNotification{
+				NotificationID: "wake:1", Kind: "done", TaskID: "task_1", TaskTitle: title, AttemptID: "attempt_1", Artifact: "https://github.com/o/r/pull/1?" + title,
+				CreatedAt: time.Now(), ClaimOwner: "driver:hermes", ClaimToken: "token", ClaimUntil: &until,
+			}, "watch:1", 1, nil)
+			if err := ValidateRequest(request); err != nil {
+				t.Fatal(err)
+			}
+			got := request.Notification.TaskTitle
+			if len(got) > MaxFieldBytes || len(got) < MaxFieldBytes-utf8.UTFMax || !utf8.ValidString(got) || !strings.HasPrefix(strings.ToValidUTF8(title, ""), got) {
+				t.Fatalf("title = %q (%d bytes)", got, len(got))
+			}
+			if request.Notification.Artifact != "" || !slices.Equal(request.Commands.Ack, []string{"shephrd", "wake", "ack", "--claim-token", "token", "--driver-id", "driver:hermes", "--json"}) {
+				t.Fatalf("oversized artifact or identity changed: %+v", request)
+			}
+		})
+	}
+	artifact := "branch:shephrd/task_1"
+	request := NewRequest(model.DriverNotification{NotificationID: "wake:1", Kind: "done", TaskID: "task_1", TaskTitle: "Fix it", Artifact: artifact, CreatedAt: time.Now(), ClaimOwner: "driver:hermes", ClaimToken: "token", ClaimUntil: &until}, "watch:1", 1, nil)
+	if request.Notification.TaskTitle != "Fix it" || request.Notification.Artifact != artifact {
+		t.Fatalf("bounded fields changed: %+v", request.Notification)
+	}
+}
+
 func TestValidateRequestRejectsConflictingOrUnboundedFields(t *testing.T) {
 	until := time.Now().Add(time.Minute)
 	valid := func() Request {
@@ -59,6 +87,8 @@ func TestValidateRequestRejectsConflictingOrUnboundedFields(t *testing.T) {
 		"mixed identity":     func(r *Request) { r.Notification.TaskID = "task_1" },
 		"missing event":      func(r *Request) { r.Notification.SubdriverEventID = 0 },
 		"oversized payload":  func(r *Request) { r.Notification.Payload = strings.Repeat("x", MaxPayloadBytes+1) },
+		"oversized title":    func(r *Request) { r.Notification.TaskTitle = strings.Repeat("x", MaxFieldBytes+1) },
+		"oversized artifact": func(r *Request) { r.Notification.Artifact = strings.Repeat("x", MaxFieldBytes+1) },
 		"missing ack":        func(r *Request) { r.Commands.Ack = nil },
 		"foreign executable": func(r *Request) { r.Commands.Read[0] = "/bin/sh" },
 		"control argument":   func(r *Request) { r.Commands.Reply[4] = "a\nb" },

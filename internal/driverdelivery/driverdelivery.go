@@ -21,6 +21,7 @@ const (
 	MaxPayloadBytes   = 8 * 1024
 	MaxDetailBytes    = 512
 	MaxIdentityBytes  = 256
+	MaxFieldBytes     = 4 * MaxIdentityBytes
 	MaxClaimToken     = 512
 	maxCommandArgs    = 16
 	maxCommandArg     = 1024
@@ -97,12 +98,16 @@ func Capability() extensionhost.Capability {
 
 func NewRequest(notification model.DriverNotification, generation string, attempt int, obligations *Obligations) Request {
 	payload, truncated := truncateUTF8(strings.ToValidUTF8(notification.Payload, ""), MaxPayloadBytes)
+	artifact := notification.Artifact
+	if len(artifact) > MaxFieldBytes || !utf8.ValidString(artifact) {
+		artifact = ""
+	}
 	request := Request{
 		Driver: Driver{ID: notification.ClaimOwner, Generation: generation},
 		Notification: Notification{
 			NotificationID: notification.NotificationID, Kind: notification.Kind, RequestID: notification.RequestID,
 			SubdriverID: notification.SubdriverID, SubdriverRepoName: notification.SubdriverRepoName, SubdriverEventID: notification.SubdriverEventID,
-			TaskID: notification.TaskID, AttemptID: notification.AttemptID, Artifact: notification.Artifact,
+			TaskID: notification.TaskID, AttemptID: notification.AttemptID, Artifact: artifact,
 			Payload: payload, PayloadTruncated: truncated, CreatedAt: notification.CreatedAt.UTC(),
 		},
 		Claim:       Claim{ClaimToken: notification.ClaimToken, ClaimUntil: notification.ClaimUntil.UTC(), DeliveryAttempt: attempt},
@@ -119,7 +124,7 @@ func NewRequest(notification model.DriverNotification, generation string, attemp
 		}
 		return request
 	}
-	request.Notification.TaskTitle = notification.TaskTitle
+	request.Notification.TaskTitle, _ = truncateUTF8(strings.ToValidUTF8(notification.TaskTitle, ""), MaxFieldBytes)
 	request.Commands = Commands{
 		Read:  []string{"shephrd", "task", "inspect", notification.TaskID, "--json"},
 		Reply: []string{"shephrd", "worker", "send", notification.TaskID, "<text>", "--json"},
@@ -140,7 +145,7 @@ func ValidateRequest(request Request) error {
 		return fmt.Errorf("delivery notification payload is invalid or oversized")
 	}
 	for _, value := range []string{notice.RequestID, notice.SubdriverID, notice.SubdriverRepoName, notice.TaskID, notice.TaskTitle, notice.AttemptID, notice.Artifact} {
-		if len(value) > MaxIdentityBytes*4 || !utf8.ValidString(value) {
+		if len(value) > MaxFieldBytes || !utf8.ValidString(value) {
 			return fmt.Errorf("delivery notification field is invalid or oversized")
 		}
 	}

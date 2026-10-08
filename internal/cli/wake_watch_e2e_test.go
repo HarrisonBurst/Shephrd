@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"shephrd/internal/driverdelivery"
 	"shephrd/internal/driverdelivery/webhook"
@@ -58,63 +59,14 @@ func (b *lockedBuffer) String() string {
 
 func TestWakeWatchBuiltCLIDeliversSignedClaimsWithOwnerExclusivity(t *testing.T) {
 	root := t.TempDir()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate test source")
-	}
-	projectRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "../.."))
-	binary := filepath.Join(root, "shephrd")
-	extension := filepath.Join(root, "shephrd-delivery-webhook")
-	for output, pkg := range map[string]string{binary: "./cmd/shephrd", extension: "./cmd/shephrd-delivery-webhook"} {
-		build := exec.Command("go", "build", "-o", output, pkg)
-		build.Dir = projectRoot
-		if out, err := build.CombinedOutput(); err != nil {
-			t.Fatalf("build %s: %s %v", pkg, out, err)
-		}
-	}
-	key := []byte("fixture signing key")
-	secret := filepath.Join(root, "secret")
-	if err := os.WriteFile(secret, []byte("whsec_"+base64.StdEncoding.EncodeToString(key)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	var mu sync.Mutex
-	statuses := []int{http.StatusOK, http.StatusServiceUnavailable}
-	deliveries := make(chan webhookDelivery, 16)
-	receiver := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		body, _ := io.ReadAll(request.Body)
-		var decoded driverdelivery.Request
-		if err := extensionhost.StrictDecode(body, &decoded); err != nil {
-			t.Errorf("receiver body: %v", err)
-		}
-		deliveries <- webhookDelivery{id: request.Header.Get("webhook-id"), timestamp: request.Header.Get("webhook-timestamp"), signature: request.Header.Get("webhook-signature"), body: body, request: decoded}
-		mu.Lock()
-		status := http.StatusOK
-		if len(statuses) > 0 {
-			status, statuses = statuses[0], statuses[1:]
-		}
-		mu.Unlock()
-		writer.WriteHeader(status)
-	}))
-	defer receiver.Close()
-	next := func(description string) webhookDelivery {
-		t.Helper()
-		select {
-		case delivery := <-deliveries:
-			if delivery.signature != webhook.Signature(key, delivery.id, delivery.timestamp, delivery.body) || delivery.id != webhook.WebhookID(delivery.request.Notification.NotificationID, delivery.request.Claim.ClaimToken) {
-				t.Fatalf("%s: unsigned or misidentified delivery %+v", description, delivery)
-			}
-			return delivery
-		case <-time.After(15 * time.Second):
-			t.Fatalf("timed out waiting for %s", description)
-		}
-		return webhookDelivery{}
-	}
+	binary, extension := buildWakeWatchBinaries(t, root)
+	receiver := startWakeWatchReceiver(t, root, http.StatusOK, http.StatusServiceUnavailable)
+	next, secret := receiver.next, receiver.secret
 
 	database := filepath.Join(root, "state.db")
 	base := fmt.Sprintf("database_path = %q\ndata_dir = %q\nworktree_root = %q\n[memory]\nenabled = false\n[wake]\nclaim_ttl = \"30s\"\nclaim_ttl_min = \"30s\"\n[wake_watch]\npoll_min = \"100ms\"\npoll_max = \"200ms\"\nrenew_horizon = \"2s\"\n", database, filepath.Join(root, "data"), filepath.Join(root, "worktrees"))
 	digest := fixtureDigest(t, extension)
-	delivery := fmt.Sprintf("[wake_watch.delivery]\nextension_id = \"shephrd.delivery-webhook\"\ncommand = [%q, \"--url\", %q, \"--secret-file\", %q, \"--allow-http\"]\nsha256 = %q\n", extension, receiver.URL+"/hook", secret, digest)
+	delivery := fmt.Sprintf("[wake_watch.delivery]\nextension_id = \"shephrd.delivery-webhook\"\ncommand = [%q, \"--url\", %q, \"--secret-file\", %q, \"--allow-http\"]\nsha256 = %q\n", extension, receiver.url+"/hook", secret, digest)
 	configs := map[string]string{"config": base + delivery, "unconfigured": base, "unpinned": base + strings.Replace(delivery, digest, strings.Repeat("0", 64), 1), "disabled": strings.Replace(base, "[wake]\n", "[wake]\nenabled = false\n", 1) + delivery}
 	for name, body := range configs {
 		if err := os.WriteFile(filepath.Join(root, name+".toml"), []byte(body), 0o600); err != nil {
@@ -357,6 +309,303 @@ func TestWakeWatchBuiltCLIDeliversSignedClaimsWithOwnerExclusivity(t *testing.T)
 	if !strings.Contains(watchLog.String(), `"event":"stopped"`) || !strings.Contains(watchLog.String(), `"event":"acknowledged"`) {
 		t.Fatalf("watcher log = %s", watchLog.String())
 	}
+}
+
+func TestWakeWatchBuiltCLIRestartWaitsForOutstandingClaimAndDeliversLongTitles(t *testing.T) {
+	root := t.TempDir()
+	binary, extension := buildWakeWatchBinaries(t, root)
+	receiver := startWakeWatchReceiver(t, root)
+	database := filepath.Join(root, "state.db")
+	repoRoot := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repoRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contextGit(t, repoRoot, "init", "-b", "main")
+	contextGit(t, repoRoot, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
+	config := fmt.Sprintf("database_path = %q\ndata_dir = %q\nworktree_root = %q\n[memory]\nenabled = false\n[wake]\nclaim_ttl = \"30s\"\nclaim_ttl_min = \"30s\"\n[wake_watch]\npoll_min = \"100ms\"\npoll_max = \"200ms\"\nrenew_horizon = \"30m\"\n[wake_watch.delivery]\nextension_id = \"shephrd.delivery-webhook\"\ncommand = [%q, \"--url\", %q, \"--secret-file\", %q, \"--allow-http\"]\nsha256 = %q\n",
+		database, filepath.Join(root, "data"), filepath.Join(root, "worktrees"), extension, receiver.url+"/hook", receiver.secret, fixtureDigest(t, extension))
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := compoundCLIEnvironment(os.Environ(), map[string]string{
+		"SHEPHRD_CONFIG": filepath.Join(root, "config.toml"), "SHEPHRD_WORKER": "", "PI_SESSION_ID": "",
+		"SHEPHRD_SUBDRIVER_ID": "", "SHEPHRD_SUBDRIVER_GENERATION": "", "SHEPHRD_SUBDRIVER_TOKEN": "",
+		"SHEPHRD_COORDINATOR_ID": "", "SHEPHRD_COORDINATOR_GENERATION": "", "SHEPHRD_COORDINATOR_TOKEN": "",
+	})
+	run := func(args ...string) []byte {
+		t.Helper()
+		command := exec.Command(binary, args...)
+		command.Env = environment
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		if err := command.Run(); err != nil {
+			t.Fatalf("shephrd %v: %s %v", args, stderr.String(), err)
+		}
+		return stdout.Bytes()
+	}
+
+	const owner = "driver:hermes"
+	state, err := store.Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { state.Close() })
+	var returns []string
+	for _, key := range []string{"first", "second"} {
+		request, err := state.HandoffSubdriver("", "Restart fixture", owner, key, "Request "+key, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fence, err := state.ReserveSubdriver(request.SubdriverID, 0, "pi", "fixture", "headless")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := state.StartSubdriver(fence, 0, "fixture"); err != nil {
+			t.Fatal(err)
+		}
+		event, err := state.SubdriverReturn(fence, request.ID, "return", "question", "Question "+key+"?")
+		if err != nil {
+			t.Fatal(err)
+		}
+		notifications, err := state.Notifications("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, notification := range notifications {
+			if notification.SubdriverEventID == event.ID {
+				returns = append(returns, notification.NotificationID)
+			}
+		}
+	}
+	if len(returns) != 2 {
+		t.Fatalf("fixture returns = %v", returns)
+	}
+	run("repo", "add", repoRoot, "--name", "titles", "--json")
+	titles := []string{strings.Repeat("Long explicit title ", 60), strings.Repeat("長いタイトル", 70)}
+	var tasks []model.Task
+	var questions []string
+	for index, title := range titles {
+		var task model.Task
+		if err := json.Unmarshal(run("task", "create", "--repo", "titles", "--feature", fmt.Sprintf("long-%d", index), "--title", title, "--deliverable", "code", "--driver-id", owner, "Exercise long titles", "--json"), &task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Title != strings.TrimSpace(title) || len(task.Title) <= 1024 {
+			t.Fatalf("task title = %d bytes, want explicit title over 1024 bytes", len(task.Title))
+		}
+		attempt, err := state.BeginAttempt(task.ID, "pi", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := configureAttempt(t, state, attempt.ID, "session", filepath.Join(root, "tree-"+attempt.ID), "lease-"+attempt.ID, "branch-"+attempt.ID); err != nil {
+			t.Fatal(err)
+		}
+		generation, err := state.ReserveRunGeneration(attempt.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := state.RecordSystemCheckpoint(attempt.ID, generation, "assigned", []string{"answer"}, model.WorkspaceFacts{}); err != nil {
+			t.Fatal(err)
+		}
+		checkpoint := model.Checkpoint{SchemaVersion: model.CheckpointSchemaVersion, Summary: "waiting", NextSteps: []string{"answer"}}
+		if _, err := state.AddEventForRun(attempt.ID, generation, model.Event{Type: "checkpoint", Payload: "waiting", Checkpoint: &checkpoint}, 1, model.WorkspaceFacts{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := state.AddEventForRun(attempt.ID, generation, model.Event{Type: "question", Payload: "Which option?"}, 2, model.WorkspaceFacts{}); err != nil {
+			t.Fatal(err)
+		}
+		notifications, err := state.Notifications(task.ID)
+		if err != nil || len(notifications) != 1 {
+			t.Fatalf("task %s notifications = %+v %v", task.ID, notifications, err)
+		}
+		tasks = append(tasks, task)
+		questions = append(questions, notifications[0].NotificationID)
+	}
+
+	start := func() (*exec.Cmd, *lockedBuffer, chan error) {
+		t.Helper()
+		watch := exec.Command(binary, "wake", "watch", "--driver-id", owner, "--json-log")
+		watch.Env = environment
+		log := &lockedBuffer{}
+		watch.Stdout, watch.Stderr = log, log
+		if err := watch.Start(); err != nil {
+			t.Fatal(err)
+		}
+		exited := make(chan error, 1)
+		go func() { exited <- watch.Wait() }()
+		t.Cleanup(func() {
+			if watch.ProcessState == nil {
+				_ = watch.Process.Kill()
+				<-exited
+			}
+		})
+		waitFor(t, "watcher start", func() bool { return strings.Contains(log.String(), `"event":"started"`) })
+		return watch, log, exited
+	}
+	stop := func(watch *exec.Cmd, log *lockedBuffer, exited chan error) {
+		t.Helper()
+		if err := watch.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-exited:
+			if err != nil {
+				t.Fatalf("watcher exit: %v\n%s", err, log.String())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("watcher did not stop after SIGTERM")
+		}
+	}
+	ack := func(delivery webhookDelivery) {
+		t.Helper()
+		command := exec.Command(binary, delivery.request.Commands.Ack[1:]...)
+		command.Env = environment
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("consumer ack: %s %v", output, err)
+		}
+	}
+	pending := func(id string) {
+		t.Helper()
+		if notice, err := state.Notification(id); err != nil || notice.State != model.NotificationPending {
+			t.Fatalf("notification %s = %+v %v, want pending", id, notice, err)
+		}
+	}
+
+	watch, log, exited := start()
+	first := receiver.next("first return")
+	if first.request.Notification.NotificationID != returns[0] {
+		t.Fatalf("first delivery = %+v", first.request)
+	}
+	stop(watch, log, exited)
+
+	watch, log, exited = start()
+	receiver.none("delivery while the previous generation's claim is outstanding", 1500*time.Millisecond)
+	pending(returns[1])
+	if outstanding, err := state.Notification(returns[0]); err != nil || outstanding.State != model.NotificationClaimed || outstanding.ClaimToken != first.request.Claim.ClaimToken || outstanding.DriverGeneration != first.request.Driver.Generation {
+		t.Fatalf("restarted watcher changed the outstanding claim: %+v %v", outstanding, err)
+	}
+	ack(first)
+	second := receiver.next("second return after the outstanding claim is acknowledged")
+	if second.request.Notification.NotificationID != returns[1] || second.request.Driver.Generation == first.request.Driver.Generation {
+		t.Fatalf("second delivery = %+v", second.request)
+	}
+	stop(watch, log, exited)
+
+	watch, log, exited = start()
+	receiver.none("delivery while the previous generation's claim is unexpired", 1500*time.Millisecond)
+	pending(questions[0])
+	db, err := sql.Open("sqlite", database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano), returns[1]); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	redelivered := receiver.next("expired return redelivered first")
+	if redelivered.request.Notification.NotificationID != returns[1] || redelivered.request.Claim.ClaimToken == second.request.Claim.ClaimToken {
+		t.Fatalf("redelivered = %+v", redelivered.request)
+	}
+	ack(redelivered)
+	previous := redelivered
+	for index, task := range tasks {
+		delivery := receiver.next(fmt.Sprintf("long title %d", index))
+		title := delivery.request.Notification.TaskTitle
+		if delivery.request.Notification.TaskID != task.ID || len(title) > 1024 || len(title) < 1000 || !utf8.ValidString(title) || !strings.HasPrefix(task.Title, title) {
+			t.Fatalf("long title delivery %d = %q (%d bytes)", index, title, len(title))
+		}
+		if delivery.request.Claim.ClaimToken == previous.request.Claim.ClaimToken {
+			t.Fatalf("long title delivery %d reused a claim", index)
+		}
+		ack(delivery)
+		previous = delivery
+	}
+	waitFor(t, "final acknowledgement observed", func() bool { return strings.Count(log.String(), `"event":"acknowledged"`) == 3 })
+	stop(watch, log, exited)
+	for _, id := range append(returns, questions...) {
+		if notice, err := state.Notification(id); err != nil || notice.State != model.NotificationAcknowledged {
+			t.Fatalf("notification %s = %+v %v", id, notice, err)
+		}
+	}
+	if strings.Contains(log.String(), `"event":"undeliverable"`) {
+		t.Fatalf("watcher log = %s", log.String())
+	}
+}
+
+type wakeWatchReceiver struct {
+	t          *testing.T
+	url        string
+	secret     string
+	key        []byte
+	deliveries chan webhookDelivery
+}
+
+func startWakeWatchReceiver(t *testing.T, root string, statuses ...int) *wakeWatchReceiver {
+	t.Helper()
+	receiver := &wakeWatchReceiver{t: t, secret: filepath.Join(root, "secret"), key: []byte("fixture signing key"), deliveries: make(chan webhookDelivery, 16)}
+	if err := os.WriteFile(receiver.secret, []byte("whsec_"+base64.StdEncoding.EncodeToString(receiver.key)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		var decoded driverdelivery.Request
+		if err := extensionhost.StrictDecode(body, &decoded); err != nil {
+			t.Errorf("receiver body: %v", err)
+		}
+		receiver.deliveries <- webhookDelivery{id: request.Header.Get("webhook-id"), timestamp: request.Header.Get("webhook-timestamp"), signature: request.Header.Get("webhook-signature"), body: body, request: decoded}
+		mu.Lock()
+		status := http.StatusOK
+		if len(statuses) > 0 {
+			status, statuses = statuses[0], statuses[1:]
+		}
+		mu.Unlock()
+		writer.WriteHeader(status)
+	}))
+	t.Cleanup(server.Close)
+	receiver.url = server.URL
+	return receiver
+}
+
+func (r *wakeWatchReceiver) next(description string) webhookDelivery {
+	r.t.Helper()
+	select {
+	case delivery := <-r.deliveries:
+		if delivery.signature != webhook.Signature(r.key, delivery.id, delivery.timestamp, delivery.body) || delivery.id != webhook.WebhookID(delivery.request.Notification.NotificationID, delivery.request.Claim.ClaimToken) {
+			r.t.Fatalf("%s: unsigned or misidentified delivery %+v", description, delivery)
+		}
+		return delivery
+	case <-time.After(15 * time.Second):
+		r.t.Fatalf("timed out waiting for %s", description)
+	}
+	return webhookDelivery{}
+}
+
+func (r *wakeWatchReceiver) none(description string, wait time.Duration) {
+	r.t.Helper()
+	select {
+	case delivery := <-r.deliveries:
+		r.t.Fatalf("unexpected %s: %+v", description, delivery.request)
+	case <-time.After(wait):
+	}
+}
+
+func buildWakeWatchBinaries(t *testing.T, root string) (string, string) {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate test source")
+	}
+	projectRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "../.."))
+	binary := filepath.Join(root, "shephrd")
+	extension := filepath.Join(root, "shephrd-delivery-webhook")
+	for output, pkg := range map[string]string{binary: "./cmd/shephrd", extension: "./cmd/shephrd-delivery-webhook"} {
+		build := exec.Command("go", "build", "-o", output, pkg)
+		build.Dir = projectRoot
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build %s: %s %v", pkg, out, err)
+		}
+	}
+	return binary, extension
 }
 
 func waitFor(t *testing.T, description string, condition func() bool) {

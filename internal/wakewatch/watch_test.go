@@ -174,7 +174,11 @@ func (r *recorder) eventCount(name string) int {
 
 func start(t *testing.T, f *fixture, r *recorder, deliverer Deliverer, horizon time.Duration) (string, func()) {
 	t.Helper()
-	generation := "watch:" + strings.ReplaceAll(t.Name(), "/", "-")
+	return startGeneration(t, f, r, deliverer, horizon, "watch:"+strings.ReplaceAll(t.Name(), "/", "-"))
+}
+
+func startGeneration(t *testing.T, f *fixture, r *recorder, deliverer Deliverer, horizon time.Duration, generation string) (string, func()) {
+	t.Helper()
 	watcher := Watcher{Store: f.state, Activation: r, Deliverer: deliverer, DriverID: owner, Generation: generation,
 		ClaimTTL: time.Minute, PollMin: 20 * time.Millisecond, PollMax: 40 * time.Millisecond, RenewHorizon: horizon,
 		DeliveryTimeout: 500 * time.Millisecond, Log: r.log}
@@ -237,6 +241,35 @@ func TestWatcherDeliversOneClaimAtATimeInOrderAndPumpsOnlyWhileInFlight(t *testi
 	}
 	if notice := f.notification(second); notice.State != model.NotificationClaimed || notice.AckedAt != nil {
 		t.Fatalf("watcher acknowledged or released: %+v", notice)
+	}
+}
+
+func TestRestartedWatcherWaitsForThePreviousGenerationsClaim(t *testing.T) {
+	f := newFixture(t)
+	first := f.subdriverReturn("first question")
+	second := f.subdriverReturn("second question")
+	r := &recorder{}
+	_, stop := startGeneration(t, f, r, r, time.Hour, "watch:one")
+	eventually(t, "first delivery", func() bool { return len(r.delivered()) == 1 })
+	stop()
+	claimed := f.notification(first)
+
+	restarted := &recorder{}
+	startGeneration(t, f, restarted, restarted, time.Hour, "watch:two")
+	sweeps, _ := restarted.counts()
+	eventually(t, "restarted drain passes", func() bool { current, _ := restarted.counts(); return current >= sweeps+5 })
+	if len(restarted.delivered()) != 0 || f.notification(second).State != model.NotificationPending {
+		t.Fatalf("restarted watcher delivered past an outstanding claim: %+v", restarted.delivered())
+	}
+	if notice := f.notification(first); notice.State != model.NotificationClaimed || notice.ClaimToken != claimed.ClaimToken || notice.DriverGeneration != "watch:one" || notice.ClaimUntil == nil || !notice.ClaimUntil.Equal(*claimed.ClaimUntil) {
+		t.Fatalf("restarted watcher changed the outstanding claim: %+v", notice)
+	}
+	if _, err := f.state.AckNotification(model.NotificationAckRequest{NotificationID: first, ClaimToken: claimed.ClaimToken, ConsumerID: owner, DriverGeneration: "watch:one", HandlingID: "handling:external"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "second delivery after acknowledgement", func() bool { return len(restarted.delivered()) == 1 })
+	if request := restarted.delivered()[0]; request.Notification.NotificationID != second || request.Driver.Generation != "watch:two" {
+		t.Fatalf("second request = %+v", request)
 	}
 }
 
@@ -314,14 +347,21 @@ func TestWatcherClearsSupersededAndLostClaimsWithoutAcknowledging(t *testing.T) 
 	f.exec(`UPDATE driver_notifications SET state='superseded', superseded_at=?, supersede_reason='fixture supersession' WHERE notification_id=?`, time.Now().UTC().Format(time.RFC3339Nano), first)
 	eventually(t, "second delivery", func() bool { return len(r.delivered()) == 2 })
 	f.exec(`UPDATE driver_notifications SET claim_token='foreign-token', driver_generation='watch:other' WHERE notification_id=?`, second)
+	eventually(t, "lost claim", func() bool { return r.eventCount("lost") == 1 })
+	time.Sleep(150 * time.Millisecond)
+	if len(r.delivered()) != 2 || f.notification(third).State != model.NotificationPending {
+		t.Fatalf("watcher delivered past the foreign generation's claim: %d", len(r.delivered()))
+	}
+	f.exec(`UPDATE driver_notifications SET state='acknowledged', acked_at=?, ack_owner=?, ack_driver_generation='watch:other', handling_id='handling:foreign' WHERE notification_id=?`, time.Now().UTC().Format(time.RFC3339Nano), owner, second)
 	eventually(t, "third delivery", func() bool { return len(r.delivered()) == 3 })
 	if r.delivered()[2].Notification.NotificationID != third || r.eventCount("superseded") != 1 || r.eventCount("lost") != 1 {
 		t.Fatalf("events = %+v", r.events)
 	}
-	for _, id := range []string{first, second} {
-		if notice := f.notification(id); notice.AckedAt != nil || notice.State == model.NotificationAcknowledged {
-			t.Fatalf("watcher acknowledged %s: %+v", id, notice)
-		}
+	if notice := f.notification(first); notice.AckedAt != nil || notice.State == model.NotificationAcknowledged {
+		t.Fatalf("watcher acknowledged %s: %+v", first, notice)
+	}
+	if notice := f.notification(second); notice.ClaimToken != "foreign-token" || notice.AckDriverGeneration != "watch:other" {
+		t.Fatalf("watcher changed the foreign claim: %+v", notice)
 	}
 }
 

@@ -293,6 +293,76 @@ func TestNotificationFairnessAndTaskOrdering(t *testing.T) {
 	}
 }
 
+func TestExclusiveDrainWaitsForTheOwnersOutstandingClaim(t *testing.T) {
+	state, firstTask, firstAttempt := notificationFixture(t)
+	defer state.Close()
+	question := func(task model.Task, attempt model.Attempt) {
+		t.Helper()
+		recordWorkerCheckpoint(t, state, attempt, attempt.RunGeneration, 1, []string{"ask"})
+		if _, err := state.AddEventForRun(attempt.ID, attempt.RunGeneration, model.Event{Type: "question", Payload: task.FeatureKey}, 2, model.WorkspaceFacts{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	question(firstTask, firstAttempt)
+	tasks := []model.Task{firstTask}
+	for _, owner := range []string{"driver:test", "driver:other"} {
+		task, err := state.CreateTask(model.Task{Title: "Test task", DriverID: owner, RepoID: firstTask.RepoID, FeatureKey: "exclusive-" + strings.TrimPrefix(owner, "driver:"), Objective: "exclusive"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempt, err := state.BeginAttempt(task.ID, "pi", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := state.ConfigureAttempt(attempt.ID, "session-"+task.ID, "/tmp/tree-"+task.ID, "lease-"+task.ID, "branch-"+task.ID); err != nil {
+			t.Fatal(err)
+		}
+		attempt.RunGeneration = prepareAttempt(t, state, attempt)
+		question(task, attempt)
+		tasks = append(tasks, task)
+	}
+	drain := func(owner, generation string) model.NotificationDrain {
+		t.Helper()
+		result, err := state.DrainNotificationExclusive(owner, generation, 30*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	first := drain("driver:test", "watch:one")
+	if len(first.Notifications) != 1 || first.Notifications[0].TaskID != tasks[0].ID {
+		t.Fatalf("first drain = %+v", first)
+	}
+	claimed := first.Notifications[0]
+	if restarted := drain("driver:test", "watch:two"); len(restarted.Notifications) != 0 {
+		t.Fatalf("restarted drain claimed past an outstanding claim: %+v", restarted)
+	}
+	if stored, err := state.Notification(claimed.NotificationID); err != nil || stored.State != model.NotificationClaimed || stored.ClaimToken != claimed.ClaimToken || stored.DriverGeneration != "watch:one" {
+		t.Fatalf("outstanding claim changed: %+v %v", stored, err)
+	}
+	if other := drain("driver:other", "watch:other"); len(other.Notifications) != 1 || other.Notifications[0].TaskID != tasks[2].ID {
+		t.Fatalf("unrelated owner drain = %+v", other)
+	}
+	if _, err := state.db.Exec(`UPDATE driver_notifications SET claim_until=? WHERE notification_id=?`, stamp(time.Now().UTC().Add(-time.Second)), claimed.NotificationID); err != nil {
+		t.Fatal(err)
+	}
+	expired := drain("driver:test", "watch:two")
+	if expired.Reclaimed != 1 || len(expired.Notifications) != 1 || expired.Notifications[0].NotificationID != claimed.NotificationID || expired.Notifications[0].ClaimToken == claimed.ClaimToken {
+		t.Fatalf("expired claim was not redelivered first: %+v", expired)
+	}
+	if blocked := drain("driver:test", "watch:two"); len(blocked.Notifications) != 0 {
+		t.Fatalf("drain claimed past its own outstanding claim: %+v", blocked)
+	}
+	reclaimed := expired.Notifications[0]
+	if _, err := state.AckNotification(model.NotificationAckRequest{NotificationID: reclaimed.NotificationID, ClaimToken: reclaimed.ClaimToken, ConsumerID: "driver:test", DriverGeneration: "watch:two", HandlingID: "handling:first"}); err != nil {
+		t.Fatal(err)
+	}
+	if next := drain("driver:test", "watch:three"); len(next.Notifications) != 1 || next.Notifications[0].TaskID != tasks[1].ID {
+		t.Fatalf("drain after acknowledgement = %+v", next)
+	}
+}
+
 func TestTaskAdoptionRetargetsAndReleasesClaims(t *testing.T) {
 	state, task, attempt := notificationFixture(t)
 	defer state.Close()
