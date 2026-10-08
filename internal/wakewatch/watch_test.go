@@ -82,7 +82,7 @@ func (f *fixture) subdriverReturn(text string) string {
 
 func (f *fixture) exec(query string, args ...any) {
 	f.t.Helper()
-	db, err := sql.Open("sqlite", f.database)
+	db, err := sql.Open("sqlite", f.database+"?_busy_timeout=5000")
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -517,6 +517,61 @@ func TestWatcherCancellationWaitsForTheInFlightActivationPass(t *testing.T) {
 	}
 	if notice := f.notification(id); notice.State != model.NotificationClaimed || notice.AckedAt != nil {
 		t.Fatalf("notification = %+v", notice)
+	}
+}
+
+func TestWatcherCancellationDuringDrainActivationClaimsNothing(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		inFlight bool
+	}{{name: "synchronous pass"}, {name: "in-flight pass", inFlight: true}} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t)
+			r := &recorder{}
+			var gate chan struct{}
+			if test.inFlight {
+				f.subdriverReturn("first question")
+			} else {
+				gate = r.block()
+			}
+			watcher := Watcher{Store: f.state, Activation: r, Deliverer: r, DriverID: owner, Generation: "watch:cancel",
+				ClaimTTL: time.Minute, PollMin: 20 * time.Millisecond, PollMax: 40 * time.Millisecond, RenewHorizon: time.Hour,
+				DeliveryTimeout: 500 * time.Millisecond, Log: r.log}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				watcher.Run(ctx)
+				close(done)
+			}()
+			if test.inFlight {
+				eventually(t, "first delivery", func() bool { return len(r.delivered()) == 1 })
+				gate = r.block()
+				eventually(t, "slow activation pass", func() bool { blocked, _ := r.pumpState(); return blocked == 1 })
+				first := r.delivered()[0]
+				if _, err := f.state.AckNotification(model.NotificationAckRequest{NotificationID: first.Notification.NotificationID, ClaimToken: first.Claim.ClaimToken, ConsumerID: owner, DriverGeneration: first.Driver.Generation, HandlingID: "handling:external"}); err != nil {
+					t.Fatal(err)
+				}
+				eventually(t, "acknowledgement during slow activation", func() bool { return r.eventCount("acknowledged") == 1 })
+			}
+			eventually(t, "blocked activation pass", func() bool { blocked, _ := r.pumpState(); return blocked == 1 })
+			deliveries := len(r.delivered())
+			id := f.subdriverReturn("question during activation")
+			time.Sleep(50 * time.Millisecond)
+			sweeps, pumps := r.counts()
+			cancel()
+			close(gate)
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("watcher did not stop after the activation pass finished")
+			}
+			if current, currentPumps := r.counts(); current != sweeps || currentPumps != pumps || len(r.delivered()) != deliveries || r.eventCount("stopped") != 1 {
+				t.Fatalf("watcher continued after cancellation: sweeps %d -> %d, pumps %d -> %d, deliveries %d -> %d, events %+v", sweeps, current, pumps, currentPumps, deliveries, len(r.delivered()), r.events)
+			}
+			if notice := f.notification(id); notice.State != model.NotificationPending || notice.ClaimToken != "" {
+				t.Fatalf("notification claimed after cancellation = %+v", notice)
+			}
+		})
 	}
 }
 

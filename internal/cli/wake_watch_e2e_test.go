@@ -253,7 +253,7 @@ func TestWakeWatchBuiltCLIDeliversSignedClaimsWithOwnerExclusivity(t *testing.T)
 		t.Fatalf("second = %+v, retried = %+v", second.request, retried.request)
 	}
 	waitFor(t, "renewal horizon", func() bool { return strings.Contains(watchLog.String(), `"event":"horizon"`) })
-	db, err := sql.Open("sqlite", database)
+	db, err := sql.Open("sqlite", database+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func TestWakeWatchBuiltCLIRestartWaitsForOutstandingClaimAndDeliversLongTitles(t
 	watch, log, exited = start()
 	receiver.none("delivery while the previous generation's claim is unexpired", 1500*time.Millisecond)
 	pending(questions[0])
-	db, err := sql.Open("sqlite", database)
+	db, err := sql.Open("sqlite", database+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -694,6 +694,151 @@ func TestWakeWatchBuiltCLIKeepsClaimRenewedDuringSlowActivation(t *testing.T) {
 			t.Fatalf("idle owner changed during slow activation: %+v", candidate)
 		}
 	}
+}
+
+func TestWakeWatchBuiltCLIStopsWithoutClaimingWhenSignalledDuringDrainActivation(t *testing.T) {
+	root := t.TempDir()
+	binary, extension := buildWakeWatchBinaries(t, root)
+	terminalExtension := filepath.Join(root, "herdr")
+	build := exec.Command("go", "build", "-o", terminalExtension, "./internal/terminal/testdata/herdrextension")
+	build.Dir = "../.."
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build terminal fixture: %s %v", output, err)
+	}
+	receiver := startWakeWatchReceiver(t, root)
+	database := filepath.Join(root, "state.db")
+	operations := filepath.Join(root, "operations")
+	config := fmt.Sprintf("database_path = %q\ndata_dir = %q\nworktree_root = %q\n[memory]\nenabled = false\n[wake]\nclaim_ttl = \"30s\"\nclaim_ttl_min = \"30s\"\n[wake_watch]\npoll_min = \"100ms\"\npoll_max = \"200ms\"\nrenew_horizon = \"30m\"\n[wake_watch.delivery]\nextension_id = \"shephrd.delivery-webhook\"\ncommand = [%q, \"--url\", %q, \"--secret-file\", %q, \"--allow-http\"]\nsha256 = %q\n[terminal_extensions.herdr]\ncommand = [%q, %q, %q]\nsha256 = %q\n",
+		database, filepath.Join(root, "data"), filepath.Join(root, "worktrees"), extension, receiver.url+"/hook", receiver.secret, fixtureDigest(t, extension), terminalExtension, operations, binary, fixtureDigest(t, terminalExtension))
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := compoundCLIEnvironment(os.Environ(), map[string]string{
+		"SHEPHRD_CONFIG": filepath.Join(root, "config.toml"), "SHEPHRD_WORKER": "", "PI_SESSION_ID": "",
+		"SHEPHRD_SUBDRIVER_ID": "", "SHEPHRD_SUBDRIVER_GENERATION": "", "SHEPHRD_SUBDRIVER_TOKEN": "",
+		"SHEPHRD_COORDINATOR_ID": "", "SHEPHRD_COORDINATOR_GENERATION": "", "SHEPHRD_COORDINATOR_TOKEN": "",
+	})
+
+	const owner = "driver:hermes"
+	state, err := store.Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { state.Close() })
+	idle, err := state.HandoffSubdriver("", "Drain activation fixture", owner, "idle", "Idle request", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idleFence, err := state.ReserveSubdriver(idle.SubdriverID, 0, "pi", "fixture", "herdr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetSubdriverEndpoint(idleFence, model.TerminalEndpoint{Backend: "herdr", SocketPath: "/socket", WorkspaceID: "w7", TabID: "w7:t2", PaneID: "w7:p2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.StartSubdriver(idleFence, 0, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := state.SubdriverPage(idleFence.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range page.Events {
+		if err := state.HandleSubdriverEvent(idleFence, event.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := state.FinishSubdriver(idleFence, "retained", ""); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{".absent": "", ".delay": "3s"} {
+		if err := os.WriteFile(operations+name, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := func() (*exec.Cmd, *lockedBuffer, chan error) {
+		t.Helper()
+		watch := exec.Command(binary, "wake", "watch", "--driver-id", owner, "--json-log")
+		watch.Env = environment
+		log := &lockedBuffer{}
+		watch.Stdout, watch.Stderr = log, log
+		if err := watch.Start(); err != nil {
+			t.Fatal(err)
+		}
+		exited := make(chan error, 1)
+		go func() { exited <- watch.Wait() }()
+		t.Cleanup(func() {
+			if watch.ProcessState == nil {
+				_ = watch.Process.Kill()
+				<-exited
+			}
+		})
+		return watch, log, exited
+	}
+	stop := func(watch *exec.Cmd, log *lockedBuffer, exited chan error) {
+		t.Helper()
+		if err := watch.Process.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-exited:
+			if err != nil {
+				t.Fatalf("watcher exit: %v\n%s", err, log.String())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("watcher did not stop after SIGTERM")
+		}
+	}
+
+	watch, log, exited := start()
+	waitFor(t, "drain-time activation probe", func() bool {
+		body, _ := os.ReadFile(operations)
+		return strings.Contains(string(body), "process_info\n")
+	})
+	request, err := state.HandoffSubdriver("", "Drain activation fixture", owner, "question", "Question request", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence, err := state.ReserveSubdriver(request.SubdriverID, 0, "pi", "fixture", "headless")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.StartSubdriver(fence, 0, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	event, err := state.SubdriverReturn(fence, request.ID, "return", "question", "Question?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifications, err := state.Notifications("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notificationID string
+	for _, notification := range notifications {
+		if notification.SubdriverEventID == event.ID {
+			notificationID = notification.NotificationID
+		}
+	}
+	stop(watch, log, exited)
+	receiver.none("delivery after SIGTERM during drain activation", 500*time.Millisecond)
+	if notice, err := state.Notification(notificationID); err != nil || notice.State != model.NotificationPending || notice.ClaimToken != "" {
+		t.Fatalf("notification after SIGTERM during drain activation = %+v %v\n%s", notice, err, log.String())
+	}
+	if strings.Contains(log.String(), `"event":"claimed"`) || !strings.Contains(log.String(), `"event":"stopped"`) {
+		t.Fatalf("watcher log = %s", log.String())
+	}
+
+	if err := os.Remove(operations + ".delay"); err != nil {
+		t.Fatal(err)
+	}
+	watch, log, exited = start()
+	delivered := receiver.next("delivery by the restarted watcher")
+	if delivered.request.Notification.NotificationID != notificationID || delivered.request.Claim.DeliveryAttempt != 1 {
+		t.Fatalf("restarted delivery = %+v", delivered.request)
+	}
+	stop(watch, log, exited)
 }
 
 type wakeWatchReceiver struct {

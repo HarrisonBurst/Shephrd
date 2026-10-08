@@ -71,7 +71,7 @@ func (w *Watcher) Run(ctx context.Context) {
 	var current *claim
 	for ctx.Err() == nil {
 		if current == nil {
-			if current = w.drain(); current == nil {
+			if current = w.drain(ctx); current == nil {
 				if !sleep(ctx, delay) {
 					break
 				}
@@ -92,14 +92,20 @@ func (w *Watcher) Run(ctx context.Context) {
 	w.log(Event{Event: "stopped", DriverID: w.DriverID, Generation: w.Generation, Detail: "no claim was acknowledged or released; outstanding claims expire for redelivery"})
 }
 
-func (w *Watcher) drain() *claim {
+func (w *Watcher) drain(ctx context.Context) *claim {
 	w.finishPump(true)
+	if ctx.Err() != nil {
+		return nil
+	}
 	if err := w.Activation.SweepDeaths(); err != nil {
 		w.log(Event{Event: "drain_failed", Detail: err.Error()})
 		return nil
 	}
 	if err := w.Activation.PumpSubdrivers(w.DriverID); err != nil {
 		w.log(Event{Event: "drain_failed", Detail: err.Error()})
+		return nil
+	}
+	if ctx.Err() != nil {
 		return nil
 	}
 	result, err := w.Store.DrainNotificationExclusive(w.DriverID, w.Generation, w.ClaimTTL)
