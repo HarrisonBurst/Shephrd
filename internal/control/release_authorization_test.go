@@ -33,6 +33,7 @@ func newReleaseFixture(t *testing.T) (Service, *store.Store, model.Task, string)
 }
 
 func TestSpawnAcquireFailureRecordsNoWorkspace(t *testing.T) {
+	installFakeHarnesses(t, "claude")
 	service, state, task, _ := newReleaseFixture(t)
 	if _, err := service.SpawnWithModel(task.ID, "claude-code", "", "headless"); err == nil {
 		t.Fatal("spawn succeeded with an exhausted pool")

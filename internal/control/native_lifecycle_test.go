@@ -25,6 +25,7 @@ type nativeFixture struct {
 
 func newNativeFixture(t *testing.T) *nativeFixture {
 	t.Helper()
+	installFakePi(t)
 	base := t.TempDir()
 	repoPath := filepath.Join(base, "repo")
 	if err := os.MkdirAll(repoPath, 0o700); err != nil {
