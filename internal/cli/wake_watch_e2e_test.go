@@ -28,6 +28,7 @@ import (
 	"shephrd/internal/driverdelivery/webhook"
 	extensionhost "shephrd/internal/extension"
 	"shephrd/internal/model"
+	"shephrd/internal/process"
 	"shephrd/internal/store"
 	"shephrd/internal/wakewatch"
 )
@@ -1114,4 +1115,143 @@ func fixtureDigest(t *testing.T, path string) string {
 	}
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
+}
+
+func TestWakeWatchBuiltCLIReactivatesHeadlessSubdriverAndHoldsDeadRunner(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 fixture runtime unavailable")
+	}
+	root := t.TempDir()
+	binary, extension := buildWakeWatchBinaries(t, root)
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/usr/bin/env python3
+import os,sys,json,subprocess,signal
+exe=os.environ['SHEPHRD_EXECUTABLE']
+root=os.environ['FIXTURE_ROOT']
+def cli(*args):
+ p=subprocess.run([exe,*args,'--json'],capture_output=True,text=True)
+ assert p.returncode==0,(args,p.stdout,p.stderr)
+ return json.loads(p.stdout)
+def event(v):return '<shephrd-event>'+json.dumps(v)+'</shephrd-event>'
+cid=os.environ['SHEPHRD_SUBDRIVER_ID']
+with open(root+'/runners','a') as f:f.write(str(os.getppid())+'\n')
+for e in cli('subdriver','inspect',cid)['events']:
+ text=e['payload'] if e['kind']=='reply' else cli('subdriver','request',e['request_id'])['original']
+ if text.startswith('crash'):
+  os.kill(os.getppid(),signal.SIGKILL)
+  sys.exit(9)
+ cli('subdriver','return',e['request_id'],'Next? '+text,'--key','question-'+str(e['id']),'--kind','question')
+ cli('subdriver','handled',str(e['id']))
+cp={'schema_version':1,'summary':'Fixture turn','completed':[],'next_steps':[],'decisions':[],'changed_paths':[],'checks':[],'blockers':[]}
+text=event({'type':'checkpoint','payload':'checkpoint','checkpoint':cp})+'\n'+event({'type':'done','payload':'Fixture turn complete'})
+print(json.dumps({'type':'message_end','message':{'role':'assistant','content':[{'type':'text','text':text}],'stopReason':'stop'}}),flush=True)
+print(json.dumps({'type':'agent_end'}),flush=True)
+`
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	receiver := startWakeWatchReceiver(t, root)
+	database := filepath.Join(root, "state.db")
+	config := fmt.Sprintf("default_harness = \"pi\"\nworker_runtime = \"headless\"\ndatabase_path = %q\ndata_dir = %q\nworktree_root = %q\n[memory]\nenabled = false\n[wake]\nclaim_ttl = \"30s\"\nclaim_ttl_min = \"30s\"\n[wake_watch]\npoll_min = \"100ms\"\npoll_max = \"200ms\"\nrenew_horizon = \"30m\"\n[wake_watch.delivery]\nextension_id = \"shephrd.delivery-webhook\"\ncommand = [%q, \"--url\", %q, \"--secret-file\", %q, \"--allow-http\"]\nsha256 = %q\n",
+		database, filepath.Join(root, "data"), filepath.Join(root, "worktrees"), extension, receiver.url+"/hook", receiver.secret, fixtureDigest(t, extension))
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := compoundCLIEnvironment(os.Environ(), map[string]string{
+		"PATH": bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FIXTURE_ROOT": root,
+		"SHEPHRD_CONFIG": filepath.Join(root, "config.toml"), "SHEPHRD_EXECUTABLE": binary, "SHEPHRD_WORKER_RUNTIME": "headless",
+		"SHEPHRD_DRIVER_HARNESS": "pi", "SHEPHRD_DRIVER_MODEL": "fixture-model", "SHEPHRD_WORKER": "", "PI_SESSION_ID": "",
+		"SHEPHRD_SUBDRIVER_ID": "", "SHEPHRD_SUBDRIVER_GENERATION": "", "SHEPHRD_SUBDRIVER_TOKEN": "",
+		"SHEPHRD_COORDINATOR_ID": "", "SHEPHRD_COORDINATOR_GENERATION": "", "SHEPHRD_COORDINATOR_TOKEN": "",
+	})
+	const owner = "driver:hermes"
+	run := func(args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command(binary, args...)
+		cmd.Env = environment
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s %v", args, output, err)
+		}
+		return output
+	}
+	state, err := store.Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { state.Close() })
+
+	var first model.SubdriverRequest
+	if err := json.Unmarshal(run("subdriver", "handoff", "first goal", "--general-context", "Watcher activation fixture", "--driver-id", owner, "--key", "first", "--queue", "--json"), &first); err != nil {
+		t.Fatal(err)
+	}
+	watch := exec.Command(binary, "wake", "watch", "--driver-id", owner, "--json-log")
+	watch.Env = environment
+	var watchLog lockedBuffer
+	watch.Stdout, watch.Stderr = &watchLog, &watchLog
+	if err := watch.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- watch.Wait() }()
+	t.Cleanup(func() {
+		if watch.ProcessState == nil {
+			_ = watch.Process.Kill()
+			<-exited
+		}
+	})
+	reply := func(description, payload, text string) {
+		t.Helper()
+		delivered := receiver.next(description)
+		notice := delivered.request.Notification
+		if notice.RequestID != first.ID || notice.Kind != "subdriver-question" || notice.Payload != payload {
+			t.Fatalf("%s = %+v\n%s", description, delivered.request, watchLog.String())
+		}
+		command := append([]string(nil), delivered.request.Commands.Reply[1:]...)
+		for index, arg := range command {
+			command[index] = strings.NewReplacer("<text>", text, "<key>", "reply-"+text).Replace(arg)
+		}
+		run(command...)
+		run(delivered.request.Commands.Ack[1:]...)
+	}
+	idle := func(description string) model.Subdriver {
+		t.Helper()
+		var current model.Subdriver
+		waitFor(t, description, func() bool {
+			current, err = state.Subdriver(first.SubdriverID)
+			return err == nil && current.State == "idle" && current.RunnerPID > 0
+		})
+		return current
+	}
+	firstRunner := idle("first turn idle").RunnerPID
+	waitFor(t, "first runner exit observed", func() bool { return !process.Alive(firstRunner) })
+	reply("first question", "Next? first goal", "second")
+	reply("reply question from the same watcher", "Next? second", "crash")
+	var held model.Subdriver
+	waitFor(t, "dead runner held", func() bool {
+		held, err = state.Subdriver(first.SubdriverID)
+		return err == nil && held.State == "held"
+	})
+	if process.Alive(held.RunnerPID) || !strings.Contains(held.Failure, "runner exited") {
+		t.Fatalf("held owner = %+v", held)
+	}
+	runners, err := os.ReadFile(filepath.Join(root, "runners"))
+	if err != nil || strings.Count(string(runners), "\n") != 3 || !strings.HasSuffix(string(runners), strconv.Itoa(held.RunnerPID)+"\n") {
+		t.Fatalf("runner sessions = %q %v, held runner %d", runners, err, held.RunnerPID)
+	}
+
+	if err := watch.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("watcher exit: %v\n%s", err, watchLog.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("watcher did not stop after SIGTERM")
+	}
 }

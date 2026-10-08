@@ -212,7 +212,7 @@ func (s Service) ResumeSubdriverWithModelSelection(id string, foreground bool, m
 			_ = s.Store.FinishSubdriver(f, c.Checkpoint, err.Error())
 			return c, err
 		}
-		_ = cmd.Process.Release()
+		go func() { _ = cmd.Wait() }()
 	} else {
 		client, err := s.terminalClient(selection.Backend, selection.Parent.SocketPath)
 		if err != nil {
