@@ -309,7 +309,7 @@ func eligibleVerifiedReportTx(tx *sql.Tx, producerTaskID, artifactID string) err
 func (s *Store) Task(id string) (model.Task, error) {
 	task, err := scanTask(s.db.QueryRow(s.taskSelect()+` WHERE t.id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
-		return model.Task{}, fmt.Errorf("task %q does not exist", id)
+		return model.Task{}, model.Failure("not_found", "task %q does not exist", id)
 	}
 	return task, err
 }

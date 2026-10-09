@@ -188,7 +188,7 @@ func TestGateBuiltCLIHandoffReplyAckOverForcedCommand(t *testing.T) {
 	if stdout, diagnostic, status := gate(owner, mismatched, ""); status != 1 || stdout != "" || diagnostic["error_kind"] != "gate_owner_mismatch" {
 		t.Fatalf("mismatched ack: status=%d stdout=%q diagnostic=%v", status, stdout, diagnostic)
 	}
-	if stdout, diagnostic, status := gate(owner, []string{"task", "inspect", "task_missing"}, ""); status != 1 || stdout != "" || diagnostic["error"] == "" || diagnostic["error_kind"] != "" {
+	if stdout, diagnostic, status := gate(owner, []string{"task", "inspect", "task_missing"}, ""); status != 1 || stdout != "" || diagnostic["error"] != `task "task_missing" does not exist` || diagnostic["error_kind"] != "not_found" {
 		t.Fatalf("failing allowlisted command: status=%d stdout=%q diagnostic=%v", status, stdout, diagnostic)
 	}
 	stdout, diagnostic, status = gate(owner, commands.Ack, "")
@@ -225,6 +225,53 @@ func TestGateBuiltCLIHandoffReplyAckOverForcedCommand(t *testing.T) {
 	slices.Sort(want[:2])
 	if !slices.Equal(lines, want) {
 		t.Fatalf("audit lines:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestGateBuiltCLIMissingIDsReturnTypedErrors(t *testing.T) {
+	cli := newGateCLI(t)
+	const owner = "driver:hermes"
+	for _, test := range []struct {
+		name, kind, message string
+		args                []string
+	}{
+		{"request", "not_found", `sub-driver request "request_missing" does not exist`, []string{"subdriver", "request", "request_missing"}},
+		{"event", "not_found", `sub-driver event 42 does not exist`, []string{"subdriver", "event", "42"}},
+		{"inspect", "not_found", `sub-driver "coord_missing" does not exist`, []string{"subdriver", "inspect", "coord_missing"}},
+		{"reply", "not_found", `sub-driver request "request_missing" does not exist`, []string{"subdriver", "reply", "request_missing", "answer", "--key", "answer", "--reply-to", "42", "--driver-id", owner}},
+		{"task inspect", "not_found", `task "task_missing" does not exist`, []string{"task", "inspect", "task_missing"}},
+		{"wake ack", "claim_conflict", "claim token does not identify a stored notification claim", []string{"wake", "ack", "--claim-token", "missing", "--driver-id", owner}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			check := func(source, stdout string, diagnostic map[string]string, status int) {
+				t.Helper()
+				if status != 1 || stdout != "" || diagnostic["error_kind"] != test.kind || !strings.Contains(diagnostic["error"], test.message) || strings.Contains(diagnostic["error"], "sql: no rows") {
+					t.Fatalf("%s: status=%d stdout=%q diagnostic=%v", source, status, stdout, diagnostic)
+				}
+			}
+			cmd := exec.Command(cli.binary, append(slices.Clone(test.args), "--json")...)
+			cmd.Env = cli.environment
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			err := cmd.Run()
+			var diagnostic map[string]string
+			if decodeErr := json.Unmarshal(stderr.Bytes(), &diagnostic); decodeErr != nil {
+				t.Fatalf("direct: %q %v (%v)", stderr.String(), decodeErr, err)
+			}
+			status := 0
+			if exit, ok := err.(*exec.ExitError); ok {
+				status = exit.ExitCode()
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			check("direct", stdout.String(), diagnostic, status)
+			request, err := json.Marshal(test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, diagnostic, status := cli.run(t, owner, string(request), "")
+			check("gate", body, diagnostic, status)
+		})
 	}
 }
 

@@ -40,7 +40,11 @@ func (s *Store) HoldSubdriverObservation(c model.Subdriver, reason string) error
 	return tx.Commit()
 }
 func (s *Store) SubdriverEvent(id int64) (model.SubdriverEvent, error) {
-	return scanSubdriverEvent(s.db.QueryRow(subdriverEventSelect+` WHERE id=?`, id))
+	e, err := scanSubdriverEvent(s.db.QueryRow(subdriverEventSelect+` WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return e, model.Failure("not_found", "sub-driver event %d does not exist", id)
+	}
+	return e, err
 }
 func (s *Store) SubdriverSession(f model.SubdriverFence, session string) error {
 	if session == "" {

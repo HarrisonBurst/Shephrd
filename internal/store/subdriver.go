@@ -38,10 +38,18 @@ func scanSubdriverEvent(row interface{ Scan(...any) error }) (e model.SubdriverE
 	return
 }
 func (s *Store) Subdriver(id string) (model.Subdriver, error) {
-	return scanSubdriver(s.db.QueryRow(subdriverSelect+` WHERE id=?`, id))
+	c, err := scanSubdriver(s.db.QueryRow(subdriverSelect+` WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, model.Failure("not_found", "sub-driver %q does not exist", id)
+	}
+	return c, err
 }
 func (s *Store) SubdriverRequest(id string) (model.SubdriverRequest, error) {
-	return scanSubdriverRequest(s.db.QueryRow(subdriverRequestSelect+` WHERE id=?`, id))
+	r, err := scanSubdriverRequest(s.db.QueryRow(subdriverRequestSelect+` WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, model.Failure("not_found", "sub-driver request %q does not exist", id)
+	}
+	return r, err
 }
 
 func subdriverText(name, value string, limit int, required bool) error {
@@ -209,6 +217,9 @@ func (s *Store) subdriverEvent(f model.SubdriverFence, request, driver, key, kin
 		return empty, err
 	}
 	r, err := scanSubdriverRequest(tx.QueryRow(subdriverRequestSelect+` WHERE id=?`, request))
+	if errors.Is(err, sql.ErrNoRows) {
+		return empty, model.Failure("not_found", "sub-driver request %q does not exist", request)
+	}
 	if err != nil {
 		return empty, err
 	}
@@ -364,6 +375,9 @@ func (s *Store) SubdriverPage(id string, offset int) (model.SubdriverPage, error
 	}
 	defer tx.Rollback()
 	p.Subdriver, err = scanSubdriver(tx.QueryRow(subdriverSelect+` WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, model.Failure("not_found", "sub-driver %q does not exist", id)
+	}
 	if err != nil {
 		return p, err
 	}
