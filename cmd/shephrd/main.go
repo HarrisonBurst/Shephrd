@@ -9,21 +9,17 @@ import (
 )
 
 func main() {
-	if err := cli.New().Execute(); err != nil {
-		if cli.IsJSON(os.Args[1:]) {
-			response := map[string]any{"error": err.Error()}
-			if kind := cli.ErrorKind(err); kind != "" {
-				response["error_kind"] = kind
-			}
-			for key, value := range cli.ErrorEvidence(err) {
-				if key != "error" && key != "error_kind" {
-					response[key] = value
-				}
-			}
-			_ = json.NewEncoder(os.Stderr).Encode(response)
-		} else {
-			fmt.Fprintln(os.Stderr, "error:", err)
-		}
-		os.Exit(1)
+	err := cli.New().Execute()
+	if err == nil {
+		return
 	}
+	if status, ok := cli.ExitStatus(err); ok {
+		os.Exit(status)
+	}
+	if cli.IsJSON(os.Args[1:]) {
+		_ = json.NewEncoder(os.Stderr).Encode(cli.ErrorResponse(err))
+	} else {
+		fmt.Fprintln(os.Stderr, "error:", err)
+	}
+	os.Exit(1)
 }

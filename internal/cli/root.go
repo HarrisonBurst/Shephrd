@@ -97,7 +97,7 @@ func New() *cobra.Command {
 		_ = encoder.Encode(helpResponse{SchemaVersion: 1, Command: cmd.CommandPath(), Help: body.String()})
 	})
 	get := func() *application { return app }
-	root.AddCommand(completionCommand(), protocolCommand(), subdriverCommand(get), legacyCommand(get), repoCommand(get), taskCommand(get), planCommand(get), workerCommand(get), wakeCommand(get), workspaceCommand(get), runCommand(get), claudeHookCommand())
+	root.AddCommand(completionCommand(), protocolCommand(), subdriverCommand(get), legacyCommand(get), repoCommand(get), taskCommand(get), planCommand(get), workerCommand(get), wakeCommand(get), workspaceCommand(get), runCommand(get), claudeHookCommand(), gateCommand())
 	return root
 }
 
@@ -1363,6 +1363,19 @@ func ErrorEvidence(err error) map[string]string {
 		return typed.ErrorEvidence()
 	}
 	return nil
+}
+
+func ErrorResponse(err error) map[string]any {
+	response := map[string]any{"error": err.Error()}
+	if kind := ErrorKind(err); kind != "" {
+		response["error_kind"] = kind
+	}
+	for key, value := range ErrorEvidence(err) {
+		if key != "error" && key != "error_kind" {
+			response[key] = value
+		}
+	}
+	return response
 }
 
 func IsJSON(args []string) bool {

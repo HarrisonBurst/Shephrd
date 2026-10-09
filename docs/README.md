@@ -69,6 +69,7 @@ The boundaries are deliberate: task readiness does not spawn; `done` does not pr
 
 - [Authority map](reference/authority.md) identifies the owners of worker guidance, user-selected workflow preferences, skill mechanics, CLI behavior, source-enforced behavior, and migration guidance.
 - [CLI conventions and utility commands](reference/cli.md) documents bootstrap, output contracts, help, completion, and private runtime commands.
+- [Remote SSH gate](reference/ssh-gate.md) documents the `gate` forced command, its JSON-argv protocol and its allowlist for a remote non-Pi main driver.
 - [Repository context, memory, and workflow modules](reference/workflow-modules.md) documents lean context discovery, default-on agent-maintained memory with an opt-out, on-demand topics, and explicitly selected Markdown playbooks. No background indexer or workflow engine is involved.
 
 ## Minimal direct flow
