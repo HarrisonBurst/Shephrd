@@ -51,6 +51,7 @@ A bootstrap failure prevents command-specific behavior. Migration, configuration
 - `shephrd completion fish`
 - `shephrd completion zsh`
 - `shephrd legacy export <output-dir>`
+- `shephrd gate --driver-id <owner>` (SSH forced command; see [remote SSH gate](ssh-gate.md))
 - `shephrd _run`
 - `shephrd _claude-hook`
 

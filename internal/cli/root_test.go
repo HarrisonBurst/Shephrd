@@ -175,7 +175,7 @@ func TestPortableSkillCommandMapCoversPublicCommandFamilies(t *testing.T) {
 		mapped[parts[0]] = true
 	}
 
-	omitted := map[string]string{}
+	omitted := map[string]string{"gate": "SSH forced command for a remote driver, covered by references/recovery.md"}
 	for name := range public {
 		if mapped[name] {
 			continue
@@ -219,7 +219,7 @@ func TestGeneratedCommandManifestMatchesCurrentContract(t *testing.T) {
 	wantVisible := []string{
 		"shephrd subdriver", "shephrd subdriver adopt-request", "shephrd subdriver context", "shephrd subdriver dispatch", "shephrd subdriver event", "shephrd subdriver handled", "shephrd subdriver handoff", "shephrd subdriver inspect", "shephrd subdriver ls", "shephrd subdriver notification", "shephrd subdriver recover", "shephrd subdriver reply", "shephrd subdriver request", "shephrd subdriver resume", "shephrd subdriver return",
 		"shephrd completion", "shephrd completion bash", "shephrd completion fish", "shephrd completion zsh",
-		"shephrd help", "shephrd plan", "shephrd plan add", "shephrd plan adopt", "shephrd plan annotate", "shephrd plan annotations", "shephrd plan create", "shephrd plan dispatch", "shephrd plan edit", "shephrd plan ls", "shephrd plan report", "shephrd plan report add", "shephrd plan report move", "shephrd plan report rm", "shephrd plan report select", "shephrd plan requires", "shephrd plan requires add", "shephrd plan requires rm", "shephrd plan rm", "shephrd plan show",
+		"shephrd gate", "shephrd help", "shephrd plan", "shephrd plan add", "shephrd plan adopt", "shephrd plan annotate", "shephrd plan annotations", "shephrd plan create", "shephrd plan dispatch", "shephrd plan edit", "shephrd plan ls", "shephrd plan report", "shephrd plan report add", "shephrd plan report move", "shephrd plan report rm", "shephrd plan report select", "shephrd plan requires", "shephrd plan requires add", "shephrd plan requires rm", "shephrd plan rm", "shephrd plan show",
 		"shephrd legacy", "shephrd legacy export",
 		"shephrd protocol", "shephrd protocol validate",
 		"shephrd repo", "shephrd repo add", "shephrd repo context", "shephrd repo list", "shephrd repo scan",
@@ -248,6 +248,7 @@ func TestGeneratedCommandManifestMatchesCurrentContract(t *testing.T) {
 		"wake watch":        {"driver-id", "json-log"},
 		"wake parked":       {"driver-id"},
 		"wake unpark":       {"driver-id"},
+		"gate":              {"driver-id"},
 	} {
 		command, _, err := root.Find(strings.Fields(path))
 		if err != nil {
