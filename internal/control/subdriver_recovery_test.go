@@ -2,6 +2,7 @@ package control
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,6 +36,11 @@ func errorKind(err error) string {
 
 func heldOwnerFixture(t *testing.T, runtime string, runner, harness int) (*store.Store, model.SubdriverRequest, model.SubdriverFence) {
 	t.Helper()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
