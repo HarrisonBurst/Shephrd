@@ -7,6 +7,17 @@ case "${1:-}" in
   *) echo "usage: $0 [cli|all]" >&2; exit 2 ;;
 esac
 
+hash_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1"
+  else
+    echo "build-clean: SHA-256 requires sha256sum or shasum -a 256" >&2
+    return 1
+  fi
+}
+
 root="$(git rev-parse --show-toplevel)"
 commit="$(git -C "$root" rev-parse HEAD)"
 build="$(mktemp -d "${TMPDIR:-/tmp}/shephrd-clean.XXXXXX")"
@@ -44,7 +55,7 @@ if [ -f "$config" ]; then
 fi
 
 if printf '%s\n' "${commands[@]}" | grep -qx shephrd-terminal-herdr && [ -n "$extension_pin" ]; then
-  built_pin="$(shasum -a 256 "$build/shephrd-terminal-herdr" | awk '{print $1}')"
+  built_pin="$(hash_sha256 "$build/shephrd-terminal-herdr" | awk '{print $1}')"
   if [ "$built_pin" != "$extension_pin" ]; then
     if [ "${SHEPHRD_BUILD_CLEAN_REPIN:-}" != 1 ]; then
       cat >&2 <<EOF

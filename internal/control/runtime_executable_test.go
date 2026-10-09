@@ -77,7 +77,7 @@ func TestWorkerRuntimeExecutableIsSharedAcrossBackendsAndHarnesses(t *testing.T)
 		for _, harness := range []string{"claude-code", "pi", "codex"} {
 			t.Run(backend+"/"+harness, func(t *testing.T) {
 				root := t.TempDir()
-				selected := writeRuntimeExecutable(t, filepath.Join(root, "configured", "shephrd"), "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n' \"${SHEPHRD_EXECUTABLE:-}\" \"${SHEPHRD_PI_WATCHER_ENABLED:-}\" \"${SHEPHRD_DRIVER_HARNESS:-}\" \"${SHEPHRD_DRIVER_MODEL:-}\" > \"$SHEPHRD_TEST_RUNTIME\"\n")
+				selected := writeRuntimeExecutable(t, filepath.Join(root, "configured", "shephrd"), "#!/bin/sh\nprintf '%s\\n%s\\n%s\\n%s\\n' \"${SHEPHRD_EXECUTABLE:-}\" \"${SHEPHRD_PI_WATCHER_ENABLED:-}\" \"${SHEPHRD_DRIVER_HARNESS:-}\" \"${SHEPHRD_DRIVER_MODEL:-}\" > \"$SHEPHRD_TEST_RUNTIME.tmp\" && mv \"$SHEPHRD_TEST_RUNTIME.tmp\" \"$SHEPHRD_TEST_RUNTIME\"\n")
 				marker := filepath.Join(root, "runtime-environment")
 				t.Setenv("SHEPHRD_EXECUTABLE", selected)
 				t.Setenv("SHEPHRD_PI_WATCHER_ENABLED", "1")

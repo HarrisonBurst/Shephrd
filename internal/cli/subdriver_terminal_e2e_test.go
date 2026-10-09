@@ -63,7 +63,7 @@ func TestSubdriverTerminalCLIEndToEnd(t *testing.T) {
 			}
 			for _, mode := range modes {
 				t.Run(runtime+"/"+harness+"/"+mode, func(t *testing.T) {
-					if strings.Contains(mode, "transport-") && nodeErr != nil {
+					if (strings.HasPrefix(mode, "transport-") || strings.HasPrefix(mode, "repair-transport")) && nodeErr != nil {
 						t.Skip("node fixture runtime unavailable for the Pi bridge transport fixture")
 					}
 					dir := t.TempDir()

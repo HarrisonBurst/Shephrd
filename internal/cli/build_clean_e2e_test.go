@@ -114,4 +114,71 @@ func TestBuildCleanAllRepinE2E(t *testing.T) {
 	if files, err := filepath.Glob(config + ".*"); err != nil || len(files) != 0 {
 		t.Fatalf("repin left staging files: %v: %v", files, err)
 	}
+	if err := os.Remove(config); err != nil {
+		t.Fatal(err)
+	}
+	writeContextFixtureFile(t, home, ".config/shephrd/config.toml", original)
+	tools := filepath.Join(dir, "tools")
+	if err := os.Mkdir(tools, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"make", "bash", "go", "git", "grep", "awk", "sed", "head", "cat", "mktemp", "rm", "mkdir", "cp", "chmod", "mv", "gcc", "as", "ld", "pkg-config"} {
+		if executable, err := exec.LookPath(name); err == nil {
+			if err := os.Symlink(executable, filepath.Join(tools, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	sha256, shaErr := exec.LookPath("sha256sum")
+	shasum, shasumErr := exec.LookPath("shasum")
+	if shaErr != nil && shasumErr != nil {
+		t.Skip("host has no SHA-256 command to back the fixture")
+	}
+	if shaErr == nil {
+		if err := os.Symlink(sha256, filepath.Join(tools, "sha256sum")); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		writeContextFixtureFile(t, tools, "sha256sum", fmt.Sprintf("#!/bin/sh\nexec %q -a 256 \"$@\"\n", shasum))
+		if err := os.Chmod(filepath.Join(tools, "sha256sum"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runWithoutHostHash := func() (string, error) {
+		t.Helper()
+		command := exec.Command(filepath.Join(tools, "make"), "build-clean-all")
+		command.Dir = root
+		command.Env = compoundCLIEnvironment(os.Environ(), map[string]string{
+			"PATH": tools, "HOME": home, "GOCACHE": goPaths[0], "GOPATH": goPaths[1], "SHEPHRD_BUILD_CLEAN_REPIN": "1",
+		})
+		output, err := command.CombinedOutput()
+		return string(output), err
+	}
+	if output, err := runWithoutHostHash(); err != nil || readFile(t, config) != expected {
+		t.Fatalf("sha256sum without shasum: %s %v", output, err)
+	}
+	if err := os.Remove(filepath.Join(tools, "sha256sum")); err != nil {
+		t.Fatal(err)
+	}
+	if shasumErr == nil {
+		if err := os.Symlink(shasum, filepath.Join(tools, "shasum")); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		writeContextFixtureFile(t, tools, "shasum", fmt.Sprintf("#!/bin/sh\n[ \"$1\" = -a ] && [ \"$2\" = 256 ] || exit 2\nshift 2\nexec %q \"$@\"\n", sha256))
+		if err := os.Chmod(filepath.Join(tools, "shasum"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeContextFixtureFile(t, home, ".config/shephrd/config.toml", original)
+	if output, err := runWithoutHostHash(); err != nil || readFile(t, config) != expected {
+		t.Fatalf("shasum without sha256sum: %s %v", output, err)
+	}
+	if err := os.Remove(filepath.Join(tools, "shasum")); err != nil {
+		t.Fatal(err)
+	}
+	writeContextFixtureFile(t, home, ".config/shephrd/config.toml", original)
+	if output, err := runWithoutHostHash(); err == nil || !strings.Contains(output, "SHA-256 requires sha256sum or shasum -a 256") || readFile(t, config) != original {
+		t.Fatalf("missing hash tools: %s %v", output, err)
+	}
 }

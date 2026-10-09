@@ -14,6 +14,7 @@ Shephrd supports macOS and Linux and requires a POSIX environment.
 
 - Go 1.26.5 or newer
 - `git`
+- `sha256sum` or `shasum -a 256` for clean builds with a pinned Herdr extension
 - At least one worker harness: `claude`, `pi`, or `codex`
 - Authenticated `gh` for GitHub PR verification and the optional GitHub observer extension
 - Herdr protocol 17 or newer for the Herdr runtime
