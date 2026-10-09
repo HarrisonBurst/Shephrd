@@ -1,6 +1,6 @@
 # Repository context, memory, and workflow modules
 
-Status: Markdown organization with project-context discovery and default-on agent-maintained memory. Working examples live in [this repository](../../.shephrd/context.md). There is no recursive module loader, workflow engine, scheduler, background extractor, or new persistence layer.
+Status: Markdown organization with project-context discovery and default-on agent-maintained memory. Working examples live in [this repository](../../../.shephrd/context.md). There is no recursive module loader, workflow engine, scheduler, background extractor, or new persistence layer.
 
 ## Organization
 
@@ -41,7 +41,7 @@ The context command resolves the Git repository or worktree root and returns `re
 
 Initial worker briefs, retries, relaunches, and follow-ups discover the overview in the actual attempt worktree, not a dirty registered root. They supply current memory guidance and preserve the distinction between worker requirements and driver coordination. Links are not recursively expanded. Missing optional context is normal; a missing source required by the assignment must be reported. Automatic discovery in unrelated sessions without the Shephrd skill is not provided.
 
-The supplied [context](../../.shephrd/context.md), [quick-change module](../../.shephrd/modules/quick-change.md), [thorough-review module](../../.shephrd/modules/thorough-review.md), and [repository-research module](../../.shephrd/modules/repository-research.md) are usable examples. Copy and adapt only the documents needed, preserving valid links. Referencing a shared module or an existing skill directly is equally valid; local copies are not required.
+The supplied [context](../../../.shephrd/context.md), [quick-change module](../../../.shephrd/modules/quick-change.md), [thorough-review module](../../../.shephrd/modules/thorough-review.md), and [repository-research module](../../../.shephrd/modules/repository-research.md) are usable examples. Copy and adapt only the documents needed, preserving valid links. Referencing a shared module or an existing skill directly is equally valid; local copies are not required.
 
 ## Repository workflow preferences
 
@@ -83,7 +83,7 @@ Memory does not select modules, rewrite repository guidance, or grant lifecycle 
 
 Research is an opportunity to build repository knowledge, not just answer the immediate question. Within authorized curation and the task's permitted write scope, distill durable findings into relevant topics without requiring a separate request to remember each finding. Respect any memory opt-out. A focused subsystem investigation should enrich that topic, not trigger an exhaustive repository survey.
 
-The optional [repository-research module](../../.shephrd/modules/repository-research.md) describes a bounded research pass: reuse existing documentation, map the systems in scope, trace implementation and tests, and retain concise source-backed findings. Record the inspected revision, coverage, and gaps. Distinguish observed behavior, documented intent, and hypotheses; do not treat report acceptance as semantic validation.
+The optional [repository-research module](../../../.shephrd/modules/repository-research.md) describes a bounded research pass: reuse existing documentation, map the systems in scope, trace implementation and tests, and retain concise source-backed findings. Record the inspected revision, coverage, and gaps. Distinguish observed behavior, documented intent, and hypotheses; do not treat report acceptance as semantic validation.
 
 Keep the requested answer or report separate from the reusable topic summary. Explicitly read-only work must not edit repository memory. A report-only deliverable carries candidate additions in the report unless repository documentation edits are also in scope. Do not create follow-on tasks or change artifact contracts just to populate memory. The memory guidance applies during ordinary work; this optional playbook adds research structure, not a repository indexer or permission to broaden the task.
 
@@ -106,7 +106,7 @@ This is an agent-behavior setting, not a filesystem sandbox or a switch for a ha
 
 With memory enabled, agents naturally maintain useful knowledge within the task's permitted write scope without per-note approval or a separate remember request. Capture confirmed corrections, decisions, validated discoveries, and scoped research synthesis at natural points during ordinary work, before handoff or artifact finalization. If nothing useful was learned, write nothing. Do not add a reflection worker or an extra review stage merely to populate memory.
 
-On the first useful save, create a skinny overview and index if missing. Add a topic only if the finding does not belong in existing documentation; otherwise index that document without duplicating it. Do not invent workflow preferences. Update the index as topics change and briefly report meaningful edits. Detailed [project memory guidance](../../.agents/skills/shephrd/references/project-memory.md) covers the driver behavior; workers receive self-contained curation and scope guidance in their prompts. No background extractor, write-approval queue, or maintenance service is involved.
+On the first useful save, create a skinny overview and index if missing. Add a topic only if the finding does not belong in existing documentation; otherwise index that document without duplicating it. Do not invent workflow preferences. Update the index as topics change and briefly report meaningful edits. Detailed [project memory guidance](../../../.agents/skills/shephrd/references/project-memory.md) covers the driver behavior; workers receive self-contained curation and scope guidance in their prompts. No background extractor, write-approval queue, or maintenance service is involved.
 
 When updating a topic, merge overlapping notes and correct or remove stale entries instead of appending an unlimited diary. Keep the index useful and small; do not silently truncate it. No byte limit is enforced by this convention.
 

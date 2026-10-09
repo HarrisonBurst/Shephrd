@@ -93,7 +93,7 @@ func TestDriverGuidanceBoundsSmallAssignments(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
-		"README.md", "docs/README.md", "docs/reference/workflow-modules.md",
+		"README.md", "docs/archive/README.md", "docs/archive/reference/workflow-modules.md",
 		".shephrd/modules/quick-change.md", ".shephrd/modules/repository-research.md",
 	} {
 		body := string(readDriverResource(t, root, path))
@@ -121,7 +121,7 @@ func TestGuidanceResourcesPreserveAuthoritySplit(t *testing.T) {
 		}
 		readDriverResource(t, root, ".agents/skills/shephrd/references/"+name)
 	}
-	for _, path := range []string{"README.md", "docs/reference/authority.md"} {
+	for _, path := range []string{"README.md", "docs/archive/reference/authority.md"} {
 		text := string(readDriverResource(t, root, path))
 		if !strings.Contains(text, ".agents/skills/shephrd/SKILL.md") {
 			t.Errorf("%s lacks skill link", path)
