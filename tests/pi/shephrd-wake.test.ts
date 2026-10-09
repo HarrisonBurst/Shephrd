@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn as spawnProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -1000,6 +1000,58 @@ if (op === "ack") console.log('{"schema_version":1,"notification_id":"wake:1","c
       send("stop");
       child.stdin.end();
       await exit;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const op of ["drain", "pump"]) {
+  test(`stop never reports a killed in-flight ${op} whose orphan still completes`, { timeout: 10000 }, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "shephrd-stop-"));
+    const executable = join(directory, "shephrd");
+    const inner = join(directory, "inner");
+    const started = join(directory, "started");
+    const release = join(directory, "release");
+    const value = notification("driver:test", "generation:test", "token:test", Date.now() + 600000);
+    writeFileSync(inner, `#!${process.execPath}
+const { existsSync, writeFileSync } = require("node:fs");
+const op = process.argv[3];
+if (op === "drain" && ${JSON.stringify(op)} === "pump") return console.log(${JSON.stringify(JSON.stringify({ notifications: [value] }))});
+if (op !== ${JSON.stringify(op)}) return;
+writeFileSync(${JSON.stringify(started)}, "");
+const poll = setInterval(() => {
+  if (!existsSync(${JSON.stringify(release)})) return;
+  clearInterval(poll);
+  console.log(op === "drain" ? '{"notifications":[]}' : "{}");
+}, 5);
+`);
+    writeFileSync(executable, `#!/bin/sh\n${JSON.stringify(inner)} "$@"\nexit "$?"\n`);
+    chmodSync(inner, 0o700);
+    chmodSync(executable, 0o700);
+    const child = spawnProcess(process.execPath, ["-e", watcherChild], {
+      env: { ...process.env, SHEPHRD_EXECUTABLE: executable,
+        SHEPHRD_WAKE_ARGS: JSON.stringify(["wake", "drain", "--driver-id", "driver:test", "--driver-generation", "generation:test", "--json"]),
+        SHEPHRD_PI_POLL_MIN: "1", SHEPHRD_PI_POLL_MAX: "1" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", chunk => { output += String(chunk); });
+    child.stderr.on("data", chunk => { output += String(chunk); });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!existsSync(started)) {
+        assert.ok(Date.now() < deadline, output);
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      const exit = once(child, "exit");
+      child.stdin.write(JSON.stringify({ op: "stop" }) + "\n");
+      child.stdin.end();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      writeFileSync(release, "");
+      await exit;
+      assert.deepEqual(output.trim().split("\n").filter(Boolean).map(line => JSON.parse(line).type), op === "pump" ? ["notification"] : []);
+    } finally {
+      child.kill();
       rmSync(directory, { recursive: true, force: true });
     }
   });
