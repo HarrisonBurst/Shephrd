@@ -56,6 +56,11 @@ func TestGatePlanForcesJSONOwnerAndQueue(t *testing.T) {
 		{[]string{"subdriver", "reply", "request_1", "--reply-to", "1", "--key", "k", "--", "--driver-id=driver:other"},
 			[]string{"subdriver", "reply", "--driver-id=" + gateTestOwner, "--json=true", "--key=k", "--reply-to=1", "--", "request_1", "--driver-id=driver:other"}, 0},
 		{[]string{"shephrd", "subdriver", "handoff", "-h"}, []string{"subdriver", "handoff", "--help", "--json"}, 0},
+		{[]string{"subdriver", "diagnose", "coord_1"}, []string{"subdriver", "diagnose", "--driver-id=" + gateTestOwner, "--json=true", "--", "coord_1"}, 0},
+		{[]string{"subdriver", "recover", "coord_1", "--generation", "1", "--model", "exact-model", "--launch-absent", "evidence"},
+			[]string{"subdriver", "recover", "--driver-id=" + gateTestOwner, "--generation=1", "--json=true", "--launch-absent=evidence", "--model=exact-model", "--", "coord_1"}, 0},
+		{[]string{"subdriver", "resume", "coord_1", "--generation", "1", "--foreground"},
+			[]string{"subdriver", "resume", "--driver-id=" + gateTestOwner, "--foreground=true", "--generation=1", "--json=true", "--", "coord_1"}, 0},
 	} {
 		plan, err := planGate(gateTestOwner, gateRequest(t, test.request...))
 		if err != nil {
@@ -81,8 +86,10 @@ func TestGatePlanRefusesOutsideTheAllowlist(t *testing.T) {
 		{`["wake","watch","--driver-id","driver:hermes"]`, "gate_command_refused"},
 		{`["task","adopt","task_1","--new-driver-id","driver:hermes"]`, "gate_command_refused"},
 		{`["subdriver","adopt-request","request_1","--from-driver","driver:old"]`, "gate_command_refused"},
-		{`["subdriver","recover","coord_1","--generation","1"]`, "gate_command_refused"},
-		{`["subdriver","resume","coord_1"]`, "gate_command_refused"},
+		{`["subdriver","recover","coord_1","--generation","1","--driver-id","driver:other"]`, "gate_owner_mismatch"},
+		{`["subdriver","resume","coord_1","--generation","1","--driver-id="]`, "gate_owner_mismatch"},
+		{`["subdriver","diagnose","coord_1","--driver-id","driver:pi:session"]`, "gate_owner_mismatch"},
+		{`["subdriver","context","coord_1"]`, "gate_command_refused"},
 		{`["subdriver","dispatch","request_1","objective"]`, "gate_command_refused"},
 		{`["subdriver","return","request_1","text"]`, "gate_command_refused"},
 		{`["subdriver","_run","coord_1"]`, "gate_command_refused"},

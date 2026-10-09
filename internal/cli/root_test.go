@@ -217,7 +217,7 @@ func TestGeneratedCommandManifestMatchesCurrentContract(t *testing.T) {
 	sort.Strings(visible)
 	sort.Strings(hidden)
 	wantVisible := []string{
-		"shephrd subdriver", "shephrd subdriver adopt-request", "shephrd subdriver context", "shephrd subdriver dispatch", "shephrd subdriver event", "shephrd subdriver handled", "shephrd subdriver handoff", "shephrd subdriver inspect", "shephrd subdriver ls", "shephrd subdriver notification", "shephrd subdriver recover", "shephrd subdriver reply", "shephrd subdriver request", "shephrd subdriver resume", "shephrd subdriver return",
+		"shephrd subdriver", "shephrd subdriver adopt-request", "shephrd subdriver context", "shephrd subdriver diagnose", "shephrd subdriver dispatch", "shephrd subdriver event", "shephrd subdriver handled", "shephrd subdriver handoff", "shephrd subdriver inspect", "shephrd subdriver ls", "shephrd subdriver notification", "shephrd subdriver recover", "shephrd subdriver reply", "shephrd subdriver request", "shephrd subdriver resume", "shephrd subdriver return",
 		"shephrd completion", "shephrd completion bash", "shephrd completion fish", "shephrd completion zsh",
 		"shephrd gate", "shephrd help", "shephrd plan", "shephrd plan add", "shephrd plan adopt", "shephrd plan annotate", "shephrd plan annotations", "shephrd plan create", "shephrd plan dispatch", "shephrd plan edit", "shephrd plan ls", "shephrd plan report", "shephrd plan report add", "shephrd plan report move", "shephrd plan report rm", "shephrd plan report select", "shephrd plan requires", "shephrd plan requires add", "shephrd plan requires rm", "shephrd plan rm", "shephrd plan show",
 		"shephrd legacy", "shephrd legacy export",

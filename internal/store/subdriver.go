@@ -483,7 +483,18 @@ func (s *Store) SubdriverPending(id string) (bool, error) {
 	return pending, err
 }
 func (s *Store) ReserveSubdriver(id string, generation int, harness, modelID, runtime string) (model.SubdriverFence, error) {
-	f := model.SubdriverFence{ID: id, Token: NewID("session")}
+	return s.reserveSubdriver(model.Subdriver{ID: id, Generation: generation}, false, "", harness, modelID, runtime)
+}
+
+// ReserveObservedSubdriver also requires the observed retained selection to be
+// unchanged, so a concurrent recovery that replaced the model cannot be
+// overwritten with the selection read before it.
+func (s *Store) ReserveObservedSubdriver(c model.Subdriver, owner, harness, modelID, runtime string) (model.SubdriverFence, error) {
+	return s.reserveSubdriver(c, true, owner, harness, modelID, runtime)
+}
+
+func (s *Store) reserveSubdriver(c model.Subdriver, observed bool, owner, harness, modelID, runtime string) (model.SubdriverFence, error) {
+	f := model.SubdriverFence{ID: c.ID, Token: NewID("session")}
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return f, err
@@ -492,14 +503,19 @@ func (s *Store) ReserveSubdriver(id string, generation int, harness, modelID, ru
 	if err = acquireImmediateTransactionLock(tx); err != nil {
 		return f, err
 	}
-	result, err := tx.Exec(`UPDATE coordinators SET generation=generation+1,state='starting',token=?,runner_pid=0,harness_pid=0,session_id='',endpoint_json='',harness=?,model=?,runtime=?,failure='',updated_at=? WHERE id=? AND generation=? AND state='idle'`, f.Token, harness, modelID, runtime, now(), id, generation)
+	if owner != "" {
+		if err = subdriverOwnedBy(tx, c.ID, owner); err != nil {
+			return f, err
+		}
+	}
+	result, err := tx.Exec(`UPDATE coordinators SET generation=generation+1,state='starting',token=?,runner_pid=0,harness_pid=0,session_id='',endpoint_json='',harness=?,model=?,runtime=?,failure='',updated_at=? WHERE id=? AND generation=? AND state='idle' AND (?=0 OR harness=? AND model=?)`, f.Token, harness, modelID, runtime, now(), c.ID, c.Generation, observed, c.Harness, c.Model)
 	if err != nil {
 		return f, err
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
-		return f, fmt.Errorf("sub-driver generation or state conflict; inspect before recovery")
+		return f, fmt.Errorf("sub-driver generation, state or selection conflict; inspect before recovery")
 	}
-	if err = tx.QueryRow(`SELECT generation FROM coordinators WHERE id=?`, id).Scan(&f.Generation); err != nil {
+	if err = tx.QueryRow(`SELECT generation FROM coordinators WHERE id=?`, c.ID).Scan(&f.Generation); err != nil {
 		return f, err
 	}
 	return f, tx.Commit()
@@ -556,10 +572,19 @@ func finishSubdriverTx(tx *sql.Tx, f model.SubdriverFence, checkpoint, failure s
 	}
 	return nil
 }
-func (s *Store) RecoverSubdriver(id string, generation int, reasons ...string) error {
+func (s *Store) RecoverSubdriver(id string, generation int, recovery model.SubdriverRecovery) error {
 	reason := "Recorded runner, harness and endpoint absence verified."
-	if len(reasons) > 0 && reasons[0] != "" {
-		reason = reasons[0]
+	if recovery.LaunchAbsent != "" {
+		if err := subdriverText("launch-absent evidence", recovery.LaunchAbsent, 512, true); err != nil {
+			return err
+		}
+		reason = "Operator asserted absent unrecorded launch effects: " + recovery.LaunchAbsent
+	}
+	if recovery.DriverID != "" {
+		reason += " Recovered by main driver " + recovery.DriverID + "."
+	}
+	if recovery.Model != nil {
+		reason += fmt.Sprintf(" Retained model selection set to %q.", *recovery.Model)
 	}
 	if err := subdriverText("recovery reason", reason, 1024, true); err != nil {
 		return err
@@ -569,7 +594,31 @@ func (s *Store) RecoverSubdriver(id string, generation int, reasons ...string) e
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec(`UPDATE coordinators SET state='idle',token='',failure='',updated_at=? WHERE id=? AND generation=? AND state IN ('held','starting','running')`, now(), id, generation)
+	if err = acquireImmediateTransactionLock(tx); err != nil {
+		return err
+	}
+	var state, harness string
+	if err = tx.QueryRow(`SELECT state,harness FROM coordinators WHERE id=? AND generation=?`, id, generation).Scan(&state, &harness); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("sub-driver generation changed")
+	} else if err != nil {
+		return err
+	}
+	if recovery.DriverID != "" {
+		if state != "held" {
+			return model.Failure("subdriver_not_held", "sub-driver %s is %s; owner recovery requires a held owner", id, state)
+		}
+		if err = subdriverOwnedBy(tx, id, recovery.DriverID); err != nil {
+			return err
+		}
+	}
+	if recovery.Model != nil && harness == "" {
+		return fmt.Errorf("sub-driver %s has no retained harness; a model cannot be selected at recovery", id)
+	}
+	selectModel, selected := recovery.Model != nil, ""
+	if selectModel {
+		selected = *recovery.Model
+	}
+	result, err := tx.Exec(`UPDATE coordinators SET state='idle',token='',failure='',model=CASE WHEN ? THEN ? ELSE model END,updated_at=? WHERE id=? AND generation=? AND (state='held' OR ?='' AND state IN ('starting','running'))`, selectModel, selected, now(), id, generation, recovery.DriverID)
 	if err = subdriverChanged(result, err); err != nil {
 		return err
 	}
@@ -584,6 +633,47 @@ func (s *Store) RecoverSubdriver(id string, generation int, reasons ...string) e
 	}
 	return tx.Commit()
 }
+
+type subdriverQueryer interface {
+	Query(string, ...any) (*sql.Rows, error)
+}
+
+func (s *Store) SubdriverRequestOwners(id string) ([]model.SubdriverRequestOwner, error) {
+	return subdriverRequestOwners(s.db, id)
+}
+
+func subdriverRequestOwners(queryer subdriverQueryer, id string) ([]model.SubdriverRequestOwner, error) {
+	rows, err := queryer.Query(`SELECT driver_id,COUNT(*) FROM coordinator_requests WHERE coordinator_id=? GROUP BY driver_id ORDER BY driver_id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	owners := []model.SubdriverRequestOwner{}
+	for rows.Next() {
+		var owner model.SubdriverRequestOwner
+		if err = rows.Scan(&owner.DriverID, &owner.Requests); err != nil {
+			return nil, err
+		}
+		owners = append(owners, owner)
+	}
+	return owners, rows.Err()
+}
+
+func (s *Store) CheckSubdriverOwner(id, owner string) error {
+	return subdriverOwnedBy(s.db, id, owner)
+}
+
+func subdriverOwnedBy(queryer subdriverQueryer, id, owner string) error {
+	owners, err := subdriverRequestOwners(queryer, id)
+	if err != nil {
+		return err
+	}
+	if len(owners) != 1 || owners[0].DriverID != owner {
+		return model.Failure("subdriver_owner_refused", "sub-driver %s is not owned solely by %s; every linked request, including completed ones, must return to that owner", id, owner)
+	}
+	return nil
+}
+
 func (s *Store) AdoptSubdriverRequest(id, from, to string) error {
 	if err := ordinaryDriver(to); err != nil {
 		return err

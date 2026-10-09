@@ -294,6 +294,7 @@ function waitForClaim() {
 }
 async function drain() {
   const result = await run(base);
+  if (stopped) return;
   if (result.code !== 0) {
     emit({ type: "error", detail: (result.stderr || result.stdout || "wake drain failed").slice(0, 512) });
     delay = Math.min(delay * 2, pollMax);
@@ -319,7 +320,7 @@ async function drain() {
 async function pump() {
   if (!pumpSupported) return;
   const result = await run(["wake", "pump", "--driver-id", base[base.indexOf("--driver-id") + 1], "--json"]);
-  if (result.code === 0) return;
+  if (result.code === 0 || stopped) return;
   let error;
   try { error = JSON.parse(result.stderr.trim()).error; } catch {}
   if (error === 'unknown command "pump" for "shephrd wake"' || error === "unknown flag: --driver-id") {

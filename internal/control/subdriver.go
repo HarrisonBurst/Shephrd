@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"shephrd/internal/adapter"
 	"shephrd/internal/brief"
@@ -115,10 +116,10 @@ Before emission, preflight the exact authored output with 'shephrd protocol vali
 }
 
 func (s Service) ResumeSubdriver(id string, foreground bool) (model.Subdriver, error) {
-	return s.ResumeSubdriverWithModelSelection(id, foreground, "", false, nil)
+	return s.ResumeSubdriverWithModelSelection(id, foreground, "", false, nil, "")
 }
 
-func (s Service) ResumeSubdriverWithModelSelection(id string, foreground bool, modelID string, modelProvided bool, generation *int) (result model.Subdriver, launchErr error) {
+func (s Service) ResumeSubdriverWithModelSelection(id string, foreground bool, modelID string, modelProvided bool, generation *int, owner string) (result model.Subdriver, launchErr error) {
 	c, err := s.Store.Subdriver(id)
 	if err != nil {
 		return c, err
@@ -128,6 +129,11 @@ func (s Service) ResumeSubdriverWithModelSelection(id string, foreground bool, m
 	}
 	if generation != nil && (*generation < 0 || c.Generation != *generation) {
 		return c, fmt.Errorf("sub-driver generation changed")
+	}
+	if owner != "" {
+		if err = s.ownerResumeAllowed(c, owner, foreground, generation); err != nil {
+			return c, err
+		}
 	}
 	if c.State != "idle" {
 		return c, fmt.Errorf("sub-driver %s is %s; inspect and recover only after process absence is proven", id, c.State)
@@ -168,7 +174,7 @@ func (s Service) ResumeSubdriverWithModelSelection(id string, foreground bool, m
 	if _, err = s.SubdriverContext(id); err != nil {
 		return c, err
 	}
-	f, err := s.Store.ReserveSubdriver(id, c.Generation, harness, modelID, selection.Backend)
+	f, err := s.Store.ReserveObservedSubdriver(c, owner, harness, modelID, selection.Backend)
 	if err != nil {
 		return c, err
 	}
@@ -251,6 +257,23 @@ func (s Service) ResumeSubdriverWithModelSelection(id string, foreground bool, m
 		}
 	}
 	return s.Store.Subdriver(id)
+}
+
+func (s Service) ownerResumeAllowed(c model.Subdriver, owner string, foreground bool, generation *int) error {
+	if generation == nil {
+		return fmt.Errorf("owner resume requires --generation with the exact inspected sub-driver generation")
+	}
+	if foreground {
+		return model.Failure("subdriver_resume_refused", "owner resume never runs a foreground session")
+	}
+	requested, err := s.requestedRuntime()
+	if err != nil {
+		return err
+	}
+	if c.Runtime != "" && c.Runtime != "headless" || requested != "headless" {
+		return model.Failure("subdriver_resume_refused", "owner resume requires an explicitly headless runtime (retained %q, configured %q); leave terminal activation to the owner's wake watch", c.Runtime, requested)
+	}
+	return s.Store.CheckSubdriverOwner(c.ID, owner)
 }
 
 func (s Service) subdriverEnvironment(f model.SubdriverFence, executable, configPath string) []string {
@@ -547,11 +570,8 @@ func (s Service) PumpSubdrivers(driver string) error {
 	}
 	return nil
 }
-func (s Service) RecoverSubdriver(id string, generation int, launchAbsentReason ...string) error {
-	reason := ""
-	if len(launchAbsentReason) > 0 {
-		reason = strings.TrimSpace(launchAbsentReason[0])
-	}
+func (s Service) RecoverSubdriver(id string, generation int, recovery model.SubdriverRecovery) error {
+	recovery.LaunchAbsent = strings.TrimSpace(recovery.LaunchAbsent)
 	c, err := s.Store.Subdriver(id)
 	if err != nil {
 		return err
@@ -559,21 +579,145 @@ func (s Service) RecoverSubdriver(id string, generation int, launchAbsentReason 
 	if c.Generation != generation {
 		return fmt.Errorf("sub-driver generation changed")
 	}
-	if (c.RunnerPID == 0 || c.HarnessPID == 0 || c.Runtime != "headless" && c.Endpoint == nil) && reason == "" {
+	if recovery.DriverID != "" {
+		if c.State != "held" {
+			return model.Failure("subdriver_not_held", "sub-driver %s is %s; owner recovery requires a held owner", id, c.State)
+		}
+		if err = s.Store.CheckSubdriverOwner(id, recovery.DriverID); err != nil {
+			return err
+		}
+	}
+	if recovery.Model != nil {
+		if err = validateRetainedModel(c.Harness, *recovery.Model); err != nil {
+			return err
+		}
+	}
+	if !subdriverLaunchIdentityComplete(c) && recovery.LaunchAbsent == "" {
 		return fmt.Errorf("sub-driver process or endpoint identity is incomplete; inspect launch logs and exact source shephrd:coordinator:%s:%d; retain held state unless absence is explicitly confirmed with --launch-absent <reason>", id, generation)
 	}
 	if s.processAlive(c.RunnerPID) || s.processAlive(c.HarnessPID) {
 		return fmt.Errorf("sub-driver process is still live or PID has been reused; retain held state")
 	}
+	if status := s.subdriverEndpointStatus(c); status != "unrecorded" && status != "absent" {
+		return fmt.Errorf("terminal absence is not proven (%s); inspect the recorded endpoint", status)
+	}
+	return s.Store.RecoverSubdriver(id, generation, recovery)
+}
+
+type SubdriverDiagnosis struct {
+	SubdriverID            string                        `json:"subdriver_id"`
+	Generation             int                           `json:"generation"`
+	State                  string                        `json:"state"`
+	Harness                string                        `json:"harness,omitempty"`
+	Model                  string                        `json:"model,omitempty"`
+	Runtime                string                        `json:"runtime,omitempty"`
+	Runner                 SubdriverProcessEvidence      `json:"runner"`
+	HarnessProcess         SubdriverProcessEvidence      `json:"harness_process"`
+	EndpointBackend        string                        `json:"endpoint_backend,omitempty"`
+	Endpoint               string                        `json:"endpoint"`
+	LaunchIdentityComplete bool                          `json:"launch_identity_complete"`
+	RequestOwners          []model.SubdriverRequestOwner `json:"request_owners"`
+	DriverID               string                        `json:"driver_id,omitempty"`
+	Pending                bool                          `json:"pending"`
+	Recoverable            bool                          `json:"recoverable"`
+	Blockers               []string                      `json:"blockers"`
+}
+
+type SubdriverProcessEvidence struct {
+	PID    int    `json:"pid,omitempty"`
+	Status string `json:"status"`
+}
+
+// DiagnoseSubdriver reports the recovery fences without changing state,
+// closing endpoints or reading session logs.
+func (s Service) DiagnoseSubdriver(id, owner string) (SubdriverDiagnosis, error) {
+	c, err := s.Store.Subdriver(id)
+	if err != nil {
+		return SubdriverDiagnosis{}, err
+	}
+	owners, err := s.Store.SubdriverRequestOwners(id)
+	if err != nil {
+		return SubdriverDiagnosis{}, err
+	}
+	if owner != "" && !slices.ContainsFunc(owners, func(o model.SubdriverRequestOwner) bool { return o.DriverID == owner }) {
+		return SubdriverDiagnosis{}, model.Failure("subdriver_owner_refused", "sub-driver %s has no request returning to %s", id, owner)
+	}
+	pending, err := s.Store.SubdriverPending(id)
+	if err != nil {
+		return SubdriverDiagnosis{}, err
+	}
+	d := SubdriverDiagnosis{
+		SubdriverID: c.ID, Generation: c.Generation, State: c.State, Harness: c.Harness, Model: c.Model, Runtime: c.Runtime,
+		Runner: s.subdriverProcessEvidence(c.RunnerPID), HarnessProcess: s.subdriverProcessEvidence(c.HarnessPID),
+		Endpoint: s.subdriverEndpointStatus(c), LaunchIdentityComplete: subdriverLaunchIdentityComplete(c),
+		RequestOwners: owners, DriverID: owner, Pending: pending, Blockers: []string{},
+	}
 	if c.Endpoint != nil {
-		client, err := s.terminalClient(c.Endpoint.Backend, c.Endpoint.SocketPath)
-		if err != nil {
-			return err
-		}
-		_, err = client.ProcessInfo(terminalEndpoint(*c.Endpoint))
-		if terminal.Classify(err) != terminal.ErrorEndpointAbsent {
-			return fmt.Errorf("terminal absence is not proven; inspect the recorded endpoint")
+		d.EndpointBackend = c.Endpoint.Backend
+	}
+	block := func(format string, args ...any) { d.Blockers = append(d.Blockers, fmt.Sprintf(format, args...)) }
+	if owner != "" && c.State != "held" || !slices.Contains([]string{"held", "starting", "running"}, c.State) {
+		block("state is %s; recovery requires a held owner", c.State)
+	}
+	if owner != "" && (len(owners) != 1 || owners[0].DriverID != owner) {
+		block("linked requests return to other owners; owner recovery is refused")
+	}
+	for _, evidence := range []SubdriverProcessEvidence{d.Runner, d.HarnessProcess} {
+		if evidence.Status == "live_or_uncertain" {
+			block("recorded process %d is live or uncertain", evidence.PID)
 		}
 	}
-	return s.Store.RecoverSubdriver(id, generation, reason)
+	if d.Endpoint == "present" || d.Endpoint == "uncertain" {
+		block("recorded terminal endpoint is %s", d.Endpoint)
+	}
+	if !d.LaunchIdentityComplete {
+		block("launch identity is incomplete; recovery needs --launch-absent with independent evidence that unrecorded launch effects are absent, otherwise leave held")
+	}
+	d.Recoverable = len(d.Blockers) == 0
+	return d, nil
+}
+
+func subdriverLaunchIdentityComplete(c model.Subdriver) bool {
+	return c.RunnerPID != 0 && c.HarnessPID != 0 && (c.Runtime == "headless" || c.Endpoint != nil)
+}
+
+func (s Service) subdriverProcessEvidence(pid int) SubdriverProcessEvidence {
+	switch {
+	case pid <= 0:
+		return SubdriverProcessEvidence{Status: "unrecorded"}
+	case s.processAlive(pid):
+		return SubdriverProcessEvidence{PID: pid, Status: "live_or_uncertain"}
+	}
+	return SubdriverProcessEvidence{PID: pid, Status: "absent"}
+}
+
+func (s Service) subdriverEndpointStatus(c model.Subdriver) string {
+	if c.Endpoint == nil {
+		return "unrecorded"
+	}
+	client, err := s.terminalClient(c.Endpoint.Backend, c.Endpoint.SocketPath)
+	if err != nil {
+		return "uncertain"
+	}
+	_, err = client.ProcessInfo(terminalEndpoint(*c.Endpoint))
+	switch {
+	case terminal.Classify(err) == terminal.ErrorEndpointAbsent:
+		return "absent"
+	case err == nil:
+		return "present"
+	}
+	return "uncertain"
+}
+
+func validateRetainedModel(harness, modelID string) error {
+	if harness == "" {
+		return fmt.Errorf("sub-driver has no retained harness; a model cannot be selected at recovery")
+	}
+	if err := adapter.Validate(harness); err != nil {
+		return err
+	}
+	if len(modelID) > 256 || strings.HasPrefix(modelID, "-") || strings.IndexFunc(modelID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return fmt.Errorf("--model must be one exact %s model identifier", harness)
+	}
+	return nil
 }

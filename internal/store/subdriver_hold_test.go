@@ -43,7 +43,7 @@ func TestSubdriverObservationHoldRejectsChangedSnapshot(t *testing.T) {
 			case "endpoint":
 				must(s.SetSubdriverEndpoint(f, model.TerminalEndpoint{Backend: "herdr", SocketPath: "/fixture", WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p1"}))
 			case "recovered":
-				must(s.RecoverSubdriver(f.ID, f.Generation))
+				must(s.RecoverSubdriver(f.ID, f.Generation, model.SubdriverRecovery{}))
 			case "generation":
 				must(s.FinishSubdriver(f, "accepted checkpoint", ""))
 				_, err = s.ReserveSubdriver(f.ID, f.Generation, "pi", "retained", "herdr")

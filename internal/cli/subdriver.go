@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"shephrd/internal/control"
 	"shephrd/internal/model"
+	"shephrd/internal/wakewatch"
 )
 
 func subdriverCommand(get func() *application) *cobra.Command {
@@ -230,14 +231,25 @@ func subdriverCommand(get func() *application) *cobra.Command {
 	dispatch.Flags().StringVar(&deliverable, "deliverable", "code", "code or report")
 	command.AddCommand(dispatch)
 	var foreground bool
-	var resumeModel string
+	var resumeModel, resumeDriver string
 	var resumeGeneration int
 	resume := &cobra.Command{Use: "resume <subdriver-id>", Short: "Run a fresh bounded session only when durable work is pending", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		var generation *int
 		if cmd.Flags().Changed("generation") {
 			generation = &resumeGeneration
 		}
-		c, err := get().control.ResumeSubdriverWithModelSelection(args[0], foreground, resumeModel, cmd.Flags().Changed("model"), generation)
+		owner, err := explicitSubdriverOwner(cmd, resumeDriver)
+		if err != nil {
+			return err
+		}
+		if owner != "" {
+			release, err := wakewatch.Guard(get().config.DataDir, owner)
+			if err != nil {
+				return err
+			}
+			defer release()
+		}
+		c, err := get().control.ResumeSubdriverWithModelSelection(args[0], foreground, resumeModel, cmd.Flags().Changed("model"), generation, owner)
 		if err != nil {
 			return err
 		}
@@ -246,6 +258,7 @@ func subdriverCommand(get func() *application) *cobra.Command {
 	resume.Flags().BoolVar(&foreground, "foreground", false, "Run synchronously in configured headless runtime")
 	resume.Flags().StringVar(&resumeModel, "model", "", "Override the retained harness-specific model; requires --generation; empty selects the harness-native default")
 	resume.Flags().IntVar(&resumeGeneration, "generation", 0, "Exact inspected generation; required with --model")
+	resume.Flags().StringVar(&resumeDriver, "driver-id", "", "Main driver that must own every linked request; requires --generation, headless runtime and no active wake watch")
 	command.AddCommand(resume)
 	command.AddCommand(&cobra.Command{Use: "context <subdriver-id>", Short: "Preview bounded fresh-session context without starting a model", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		text, err := get().control.SubdriverContext(args[0])
@@ -254,10 +267,32 @@ func subdriverCommand(get func() *application) *cobra.Command {
 		}
 		return print(map[string]string{"context": text})
 	}})
+	var diagnoseDriver string
+	diagnose := &cobra.Command{Use: "diagnose <subdriver-id>", Short: "Report recovery fences: process, endpoint, launch identity and request owners, without changing state", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		owner, err := explicitSubdriverOwner(cmd, diagnoseDriver)
+		if err != nil {
+			return err
+		}
+		d, err := get().control.DiagnoseSubdriver(args[0], owner)
+		if err != nil {
+			return err
+		}
+		return print(d)
+	}}
+	diagnose.Flags().StringVar(&diagnoseDriver, "driver-id", "", "Main driver whose owner recovery is evaluated")
+	command.AddCommand(diagnose)
 	var recoverGeneration int
-	var launchAbsentReason string
+	var launchAbsentReason, recoverModel, recoverDriver string
 	recover := &cobra.Command{Use: "recover <subdriver-id>", Short: "Release a held session only after recorded processes and endpoint are proven absent", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if err := get().control.RecoverSubdriver(args[0], recoverGeneration, launchAbsentReason); err != nil {
+		owner, err := explicitSubdriverOwner(cmd, recoverDriver)
+		if err != nil {
+			return err
+		}
+		recovery := model.SubdriverRecovery{DriverID: owner, LaunchAbsent: launchAbsentReason}
+		if cmd.Flags().Changed("model") {
+			recovery.Model = &recoverModel
+		}
+		if err := get().control.RecoverSubdriver(args[0], recoverGeneration, recovery); err != nil {
 			return err
 		}
 		c, err := get().store.Subdriver(args[0])
@@ -268,6 +303,8 @@ func subdriverCommand(get func() *application) *cobra.Command {
 	}}
 	recover.Flags().IntVar(&recoverGeneration, "generation", 0, "Exact inspected generation")
 	recover.Flags().StringVar(&launchAbsentReason, "launch-absent", "", "Explicit operator confirmation of absent unrecorded launch effects; never overrides a live PID or endpoint")
+	recover.Flags().StringVar(&recoverModel, "model", "", "Replace the retained model for the retained harness atomically with recovery; empty selects the harness-native default")
+	recover.Flags().StringVar(&recoverDriver, "driver-id", "", "Main driver that must own every linked request; requires a held owner")
 	command.AddCommand(recover)
 	var from, to string
 	adopt := &cobra.Command{Use: "adopt-request <request-id>", Short: "Explicitly move only the main return route, never worker ownership", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -297,6 +334,13 @@ func subdriverCommand(get func() *application) *cobra.Command {
 	command.AddCommand(run)
 	return command
 }
+func explicitSubdriverOwner(cmd *cobra.Command, driver string) (string, error) {
+	if !cmd.Flags().Changed("driver-id") {
+		return "", nil
+	}
+	return resolveDriverID(driver, true, true)
+}
+
 func subdriverRequestScope(r model.SubdriverRequest) error {
 	f, err := control.SubdriverEnvironmentFence()
 	if err != nil {
