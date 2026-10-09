@@ -23,6 +23,7 @@ const gateMaxInputBytes = 256 * 1024
 var gateCommands = []string{
 	"repo list", "repo context",
 	"subdriver handoff", "subdriver reply", "subdriver inspect", "subdriver request", "subdriver event", "subdriver ls",
+	"subdriver diagnose", "subdriver recover", "subdriver resume",
 	"task inspect", "task obligations",
 	"wake ack",
 }

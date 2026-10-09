@@ -118,10 +118,10 @@ func TestSubdriverRecoveryHoldsUnknownAndLiveProcesses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = service.RecoverSubdriver(request.SubdriverID, f.Generation); err == nil {
+	if err = service.RecoverSubdriver(request.SubdriverID, f.Generation, model.SubdriverRecovery{}); err == nil {
 		t.Fatal("unknown launch recovered without evidence")
 	}
-	if err = service.RecoverSubdriver(request.SubdriverID, f.Generation, "Operator confirmed source absent before any process launch"); err != nil {
+	if err = service.RecoverSubdriver(request.SubdriverID, f.Generation, model.SubdriverRecovery{LaunchAbsent: "Operator confirmed source absent before any process launch"}); err != nil {
 		t.Fatal(err)
 	}
 	f, err = state.ReserveSubdriver(request.SubdriverID, f.Generation, "pi", "configured", "headless")
@@ -135,7 +135,7 @@ func TestSubdriverRecoveryHoldsUnknownAndLiveProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.processes.alive = func(pid int) bool { return pid == 456 }
-	if err = service.RecoverSubdriver(request.SubdriverID, f.Generation, "must not override liveness"); err == nil {
+	if err = service.RecoverSubdriver(request.SubdriverID, f.Generation, model.SubdriverRecovery{LaunchAbsent: "must not override liveness"}); err == nil {
 		t.Fatal("live harness was ignored")
 	}
 	service.processes.alive = func(int) bool { return false }
@@ -150,7 +150,7 @@ func TestSubdriverRecoveryHoldsUnknownAndLiveProcesses(t *testing.T) {
 	if err != nil || len(notices.Notifications) != 1 || notices.Notifications[0].Kind != "subdriver-blocker" {
 		t.Fatalf("held return: %+v %v", notices, err)
 	}
-	if err = service.RecoverSubdriver(c.ID, c.Generation); err != nil {
+	if err = service.RecoverSubdriver(c.ID, c.Generation, model.SubdriverRecovery{}); err != nil {
 		t.Fatal(err)
 	}
 	if err = state.CheckSubdriverFence(f); err == nil {
@@ -332,7 +332,7 @@ func TestSubdriverUsesSelectedTerminalAndRetainsUncertainEndpoint(t *testing.T) 
 	if _, err = service.ResumeSubdriver(c.ID, false); err == nil || provider.creates != 1 {
 		t.Fatal("duplicate terminal session")
 	}
-	if err = service.RecoverSubdriver(c.ID, c.Generation, "cannot override a present endpoint"); err == nil {
+	if err = service.RecoverSubdriver(c.ID, c.Generation, model.SubdriverRecovery{LaunchAbsent: "cannot override a present endpoint"}); err == nil {
 		t.Fatal("present endpoint discarded")
 	}
 	if err = service.settleSubdriverEndpoint(c); err == nil {
@@ -383,7 +383,7 @@ func TestSubdriverModelOverrideRetainsLiveAndUncertainSessions(t *testing.T) {
 				}
 				service := New(config.Config{}, state)
 				service.processes.alive = func(pid int) bool { return pid == livePID }
-				_, err = service.ResumeSubdriverWithModelSelection(f.ID, true, "replacement", true, &f.Generation)
+				_, err = service.ResumeSubdriverWithModelSelection(f.ID, true, "replacement", true, &f.Generation, "")
 				if err == nil || stateName == "idle" && !strings.Contains(err.Error(), "still live or uncertain") || stateName != "idle" && !strings.Contains(err.Error(), "is "+stateName) {
 					t.Fatalf("unsafe resume: %v", err)
 				}

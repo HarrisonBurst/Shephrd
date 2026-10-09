@@ -116,7 +116,7 @@ func TestSubdriverOwnerAndClaimCompatibilityFences(t *testing.T) {
 	if err := s.FinishSubdriver(f, "checkpoint", "held"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecoverSubdriver(f.ID, f.Generation); err != nil {
+	if err := s.RecoverSubdriver(f.ID, f.Generation, model.SubdriverRecovery{}); err != nil {
 		t.Fatal(err)
 	}
 	next := subdriverStartFixture(t, s, f.ID)

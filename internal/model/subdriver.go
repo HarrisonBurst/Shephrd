@@ -103,3 +103,14 @@ type SubdriverFence struct {
 	Generation int
 	Token      string
 }
+
+type SubdriverRecovery struct {
+	DriverID     string
+	LaunchAbsent string
+	Model        *string
+}
+
+type SubdriverRequestOwner struct {
+	DriverID string `json:"driver_id"`
+	Requests int    `json:"requests"`
+}

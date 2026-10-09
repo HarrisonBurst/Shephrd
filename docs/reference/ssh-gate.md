@@ -38,6 +38,9 @@ Exact subcommand paths:
 | `subdriver handoff` | Forward original intake; always queued (see below). |
 | `subdriver reply` | The `driver.delivery` reply vector for sub-driver returns; the store requires the request's owner. |
 | `subdriver inspect`, `subdriver request`, `subdriver event`, `subdriver ls` | Read vectors and owner inspection. |
+| `subdriver diagnose` | Read-only recovery evidence for a sub-driver with a request returning to the gate owner (see [owner recovery](#owner-recovery)). |
+| `subdriver recover` | Owner-fenced recovery of a held sub-driver every linked request of which returns to the gate owner. |
+| `subdriver resume` | Owner-fenced manual resume for an explicitly headless runtime while no `wake watch` serves the owner. |
 | `task inspect`, `task obligations` | The task-notification read vector and owner-scoped obligations. |
 | `wake ack` | The acknowledgement vector; the store requires the claim owner. |
 
@@ -46,15 +49,52 @@ Exact subcommand paths:
 - `repo add` and `repo scan`, because setup hooks run arbitrary shell and discovery runs extensions;
 - `wake drain`, `wake pump` and `wake renew`, because they would compete with the owner's watcher as a second consumer;
 - `worker send`, see below;
-- `wake watch`, `task adopt`, `subdriver adopt-request`, `subdriver recover` and `subdriver resume`, which are operator actions;
+- `wake watch`, `task adopt`, `subdriver adopt-request` and `subdriver context`, which are operator actions;
 - task creation, worker spawn, retry, stop and relaunch, sub-driver dispatch and return, landing, verification, attestation, discard, release, archive, workspace and plan mutations, protocol, completion, legacy and private commands.
 
 ## Forced and refused flags
 
 - `--json` is always set.
-- `--driver-id <owner>` is set on every allowlisted command that accepts it (`subdriver handoff`, `reply`, `ls`, `task obligations`, `wake ack`). A request in which any `--driver-id` occurrence differs, including an empty one or an earlier occurrence followed by a matching one, is refused with `gate_owner_mismatch`. The check records every value the command's own flag parser assigns, so positional text after `--` stays literal. Commands without the flag, such as `task inspect`, do not receive it.
+- `--driver-id <owner>` is set on every allowlisted command that accepts it (`subdriver handoff`, `reply`, `ls`, `diagnose`, `recover`, `resume`, `task obligations`, `wake ack`). A request in which any `--driver-id` occurrence differs, including an empty one or an earlier occurrence followed by a matching one, is refused with `gate_owner_mismatch`. The check records every value the command's own flag parser assigns, so positional text after `--` stays literal. Commands without the flag, such as `task inspect`, do not receive it.
 - `--driver-generation`, `--legacy-coordinator-json` and `--all-drivers` are refused with `gate_flag_refused`, because they change claim identity, output identity or owner scope.
 - `subdriver handoff` always gets `--queue`. The request persists without starting a model session from the SSH process, whose environment has none of the operator's runtime context. The owner's [`wake watch`](../components/notifications-watchers.md#driver-agnostic-watcher) then activates the queued sub-driver in its own pump-only passes with the watcher's runtime context, which terminal runtimes such as Herdr need for panes. Without a watcher, the queued owner waits for an operator `wake pump` or `subdriver resume`.
+
+## Owner recovery
+
+A held sub-driver normally needs a local operator. The gate lets the owner's remote driver diagnose and release one when every fence below holds, and otherwise leaves it held. The commands are the [local recovery commands](../components/subdrivers.md#restart-and-recovery) with the forced `--driver-id`, which selects their owner-fenced form.
+
+```sh
+ssh -i hermes_key host '["subdriver","inspect","coord_1"]'
+ssh -i hermes_key host '["subdriver","diagnose","coord_1"]'
+ssh -i hermes_key host '["subdriver","recover","coord_1","--generation","3","--model","exact-model-id"]'
+```
+
+`subdriver diagnose` changes nothing. It reports the generation, state, retained harness, model and runtime; each recorded runner and harness PID as `absent`, `live_or_uncertain` or `unrecorded`; the recorded terminal endpoint as `absent`, `present`, `uncertain` or `unrecorded`, probed read-only through the configured terminal extension; whether launch identity is complete; the request owners with counts; whether work is pending; and `recoverable` with any `blockers`. It never reads session or launcher logs and never prints claim or session tokens. With the forced owner it refuses (`subdriver_owner_refused`) a sub-driver with no request returning to that owner. Use `inspect`, `request` and `event` for the requests and returns themselves.
+
+`subdriver recover <id> --generation <n>` with the forced owner adds these fences to every existing check:
+
+- The exact inspected generation must still be current.
+- The sub-driver must be `held` (`subdriver_not_held` otherwise); local recovery of a `starting` or `running` owner stays a local operator action.
+- Every linked request, including completed ones, must return to the gate owner. Mixed owners, a request adopted by another driver and a sub-driver without requests are refused with `subdriver_owner_refused`.
+- The held state and the owner check are re-read in the same immediate store transaction that releases the hold, so an adoption, handoff or other recovery in between is refused rather than overwritten.
+- The existing server-side fences are unchanged: a live or reused recorded runner or harness PID, and a present or uncertain recorded endpoint, refuse recovery even with `--launch-absent`. Recovery never closes an endpoint.
+
+Incomplete launch identity (no recorded runner or harness PID, or a terminal runtime without a recorded endpoint) stays held unless the request carries `--launch-absent "<evidence and reason>"`: a nonblank operator assertion of at most 512 bytes that unrecorded launch effects are absent, naming the independent evidence, such as launcher logs and the exact `shephrd:coordinator:<id>:<generation>` source, checked on the server. The recovery event records the assertion and the gate owner. A remote driver that cannot obtain such evidence must leave the owner held and ask a local operator; `diagnose` output alone is not that evidence.
+
+`--model <exact-id>` replaces the retained model for the retained harness in the same transaction as the held-to-idle transition, so the next reservation cannot use the old model. The identifier must be one token of at most 256 bytes, without whitespace, control characters or a leading `-`; `--model=` selects the harness-native default. Recovery refuses a model when no harness is retained. Without `--model` the retained selection is kept. Reservation also compares the harness and model it read, so an activation that read the owner before a model-changing recovery is refused, and a later pass reads the new selection, instead of reserving the old model.
+
+Recovery never starts a model. It queues a recovery input for each unfinished request, and the owner's [`wake watch`](../components/notifications-watchers.md#driver-agnostic-watcher) activates the pending turn on its next pass in its own Herdr or headless runtime context.
+
+### Manual resume without a watcher
+
+`subdriver resume <id> --generation <n>` with the forced owner is for an owner whose watcher is stopped. It holds the owner's watcher lock in shared mode for the whole command, so it fails closed with `wake_watch_active` while a watcher runs, and a watcher cannot start mid-resume. It additionally requires:
+
+- `--generation`, compared with the reservation;
+- every linked request returning to the gate owner, checked atomically with the reservation;
+- a retained runtime of `headless` or none, and a server runtime (`SHEPHRD_WORKER_RUNTIME`, then `worker_runtime`, then the headless default) of exactly `headless`. A retained Herdr or cmux runtime, or a configured `auto`, `herdr` or `cmux`, is refused with `subdriver_resume_refused`, so an SSH process never runs a Herdr turn and never falls back from Herdr to headless;
+- no `--foreground`.
+
+The existing idle-state, process-absence and endpoint checks still apply, `--model` keeps its generation-fenced meaning, and an empty queue starts nothing. The resumed runner is the ordinary detached headless runner. Terminal-runtime owners wait for their watcher or a local operator.
 
 ## Why `worker send` is not allowlisted
 
@@ -70,8 +110,9 @@ Each invocation that loads configuration appends one JSON line to `<data_dir>/ga
 
 - The gate runs one command per SSH connection and keeps no state between requests.
 - Read commands keep their CLI scope: `task inspect`, `subdriver inspect`, `subdriver request` and `subdriver event` read by identifier as they do locally and are not filtered to the gate owner.
+- Remote recovery evidence is limited to `diagnose`: process liveness by PID and endpoint presence by the configured extension. The gate cannot show logs or scan for unrecorded processes, so incomplete identity without server-side evidence stays held.
 - `repo context` resolves an explicit server path and may create an absent default configuration, as it does locally.
 
 ## Tests
 
-`internal/cli/gate_test.go` covers the allowlist and forced flags for each path, refusals without execution, malformed, `null`-element, NUL and oversized requests, help after refused-flag and owner checks, repeated `--driver-id` occurrences, startup owner and environment refusals, hostile reply text, the private stdin file and its removal, stdin being ignored otherwise and audit redaction. `internal/cli/gate_e2e_test.go` runs the built CLI with `SSH_ORIGINAL_COMMAND` against a temporary store: a queued handoff from stdin, a `driver.delivery` request read compared with direct CLI output, a hostile reply and `wake ack`; and `null` elements, help with a foreign owner or refused flag, a differing `--driver-id` hidden by a later matching one and `worker send`, each refused without side effects, plus literal `--driver-id` text after `--`. These are isolated fixtures, not an SSH server or live activation.
+`internal/cli/gate_test.go` covers the allowlist and forced flags for each path, refusals without execution, malformed, `null`-element, NUL and oversized requests, help after refused-flag and owner checks, repeated `--driver-id` occurrences, startup owner and environment refusals, hostile reply text, the private stdin file and its removal, stdin being ignored otherwise and audit redaction. `internal/cli/gate_e2e_test.go` runs the built CLI with `SSH_ORIGINAL_COMMAND` against a temporary store: a queued handoff from stdin, a `driver.delivery` request read compared with direct CLI output, a hostile reply and `wake ack`; and `null` elements, help with a foreign owner or refused flag, a differing `--driver-id` hidden by a later matching one and `worker send`, each refused without side effects, plus literal `--driver-id` text after `--`. `internal/cli/gate_recovery_e2e_test.go` runs the built CLI and a real `wake watch` with a deterministic headless Pi fixture: a gate handoff completes one request, a second turn loses its runner and is held, recovery is refused while the completed request is adopted by another driver, for a stale generation, for an invalid model and for resume while the watcher runs; `diagnose` reports absent processes without tokens or log text; recovery with `--model` lets the watcher run the next turn with the selected model; after the watcher stops, Herdr, `auto`, foreground, ungenerationed and stale resumes start nothing and an owner-fenced headless resume completes the request. A second fixture refuses a live recorded runner and an uncertain recorded Herdr endpoint even with `--launch-absent`, refuses incomplete identity without a nonblank assertion, records an accepted assertion with the owner, and refuses resume of a retained Herdr owner. Store and control tests cover completed and mixed owners, non-held and repeated recovery, retained-harness model validation, bounded assertions, present, uncertain and absent endpoints, and reservation after a model-changing recovery. These are isolated fixtures, not an SSH server or live activation.

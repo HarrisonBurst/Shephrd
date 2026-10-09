@@ -131,7 +131,7 @@ func TestSubdriverConcurrentOwnersAndDispatchFences(t *testing.T) {
 	if err = s.FinishSubdriver(f, "checkpoint pointers", "failure"); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecoverSubdriver(id, f.Generation); err != nil {
+	if err = s.RecoverSubdriver(id, f.Generation, model.SubdriverRecovery{}); err != nil {
 		t.Fatal(err)
 	}
 	next := subdriverStartFixture(t, s, id)
