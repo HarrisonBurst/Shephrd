@@ -117,7 +117,7 @@ stateDiagram-v2
     queued --> running: start
     running --> waiting: question
     waiting --> running: reply or message
-    running --> done: result accepted
+    running --> done: valid worker result or all driver requests answered
     done --> running: message reopens
     running --> held: stop, failure, blocker, lost run
     waiting --> held: stop, lost run
@@ -134,7 +134,7 @@ stateDiagram-v2
 - `running`: a current run exists or is being started.
 - `waiting`: the run asked a question that its owner has not answered.
 - `held`: stopped, failed, blocked or lost. The reason says which, and the attempt keeps its workspace.
-- `done`: a result was accepted. For a driver task, done means every request it has received has a result. That is not landing or release. A message to a done task reopens it, and the earlier result stays in the log but no longer counts as current until the next accepted result.
+- `done`: a valid result has been recorded. For a worker task, its result moves the task to `done`. For a driver task, each result answers its named request; the task becomes `done` only after every request it has received is answered and the reported turn settles. This is not owner acceptance, landing or release. A message to a done task reopens it, and the earlier result stays in the log but no longer counts as current until the next valid result.
 - `closed`: nothing further will happen, with reason `delivered`, `discarded` or `cancelled`. Closing as delivered or discarded is decided by artifacts and authority.
 
 When a run's host is unreachable, the task keeps its state and its liveness is `unknown`. Any transition that needs the run to be gone, such as resume or retry, is refused until liveness is known.
