@@ -53,7 +53,7 @@ Pinned inputs never change. If a dependency changes afterwards, the dependent ta
 `task deliver <task>` is the one verb for delivering a done task:
 
 - **Report or answer:** the owner accepts the current result. The task closes as `delivered`. No grant is needed, because nothing irreversible happens: the snapshot already exists.
-- **Code:** Shephrd lands the sealed commit using the repository's landing mode, then proves it. This needs the `land` grant in every mode, because every mode publishes code.
+- **Code:** Shephrd lands the sealed commit using the repository's landing mode, then proves it. This needs the `land` grant in every mode, because every mode publishes code, and the main driver must have the user's explicit approval for this delivery.
 
 A driver task can be delivered only once all its children are closed.
 
@@ -129,7 +129,7 @@ Code is delivered only when core proves it is on the default branch:
 
 ## Discard and release
 
-- **Discard:** `task discard <task>` closes a task as `discarded` and removes its workspaces even if they hold uncommitted changes. Committed work survives on its branches. This needs the `discard` grant. Cancelling a task that never started needs no grant.
+- **Discard:** `task discard <task>` closes a task as `discarded` and removes its workspaces even if they hold uncommitted changes. Committed work survives on its branches. This needs the `discard` grant and the user's explicit approval. Cancelling a task that never started needs no grant.
 - **Release:** when a task closes, session execution removes each of its attempts' workspaces that are clean, after re-verifying identity and that no process is live. Report files already sealed from the workspace do not count as changes, since their snapshots are kept. A workspace with other uncommitted changes stays held, and its owner gets an inbox item or a continuation turn naming it. Removing it then needs `task discard --attempt <n>`.
 - Branches are never deleted, and every artifact, proof and event survives.
 
@@ -137,7 +137,7 @@ Code is delivered only when core proves it is on the default branch:
 
 Irreversible actions need a grant: `land` or `discard`. Owning a task is not enough.
 
-**Standing grants are declared in configuration**, which is the user's explicit authority:
+**Standing grants are declared in configuration**, which grants capability but is not per-action approval. The main driver still needs the user's explicit approval for each code landing or discard:
 
 ```toml
 [[grants]]
@@ -162,7 +162,7 @@ shephrd grant revoke g_7
 - A grant to a task covers that task's subtree.
 - Every grant records who granted it, when, why and its scope. Each use of a grant is recorded with the action it allowed.
 - Revoking a grant stops future uses only.
-- **By default, nothing passes down.** `shephrd init` writes a configuration granting the main driver `land` and `discard`, and sub-drivers get nothing until configuration or a runtime grant gives it to them.
+- **By default, nothing passes down.** `shephrd init` writes a configuration granting the main driver `land` and `discard`, and sub-drivers get nothing until configuration or a runtime grant gives it to them. A grant is necessary, not sufficient, for code landing or discard.
 
 ## Failure behavior
 
