@@ -96,6 +96,37 @@ CREATE TABLE runs (
     FOREIGN KEY (task, attempt) REFERENCES attempts (task, n)
 );
 
+CREATE TABLE inbox_items (
+    id INTEGER PRIMARY KEY,
+    driver TEXT NOT NULL,
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    event INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'acked')),
+    acked_by TEXT NOT NULL DEFAULT '',
+    acked_at TEXT,
+    delivery TEXT NOT NULL DEFAULT '' CHECK (delivery IN ('', 'delivered', 'retrying', 'rejected', 'failed')),
+    delivery_attempts INTEGER NOT NULL DEFAULT 0,
+    next_delivery TEXT,
+    delivery_detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE (driver, event)
+);
+
+CREATE INDEX inbox_pending ON inbox_items (driver, state);
+
+CREATE TABLE plugin_cursors (
+    plugin TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL,
+    failures INTEGER NOT NULL DEFAULT 0,
+    next_attempt TEXT,
+    last_error TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE daemon_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE plugin_data (
     task INTEGER NOT NULL REFERENCES tasks(id),
     plugin TEXT NOT NULL,

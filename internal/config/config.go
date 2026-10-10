@@ -29,6 +29,17 @@ type Config struct {
 	Providers map[string]string       `toml:"providers"`
 	Skills    map[string]Skill        `toml:"skills"`
 	Timeouts  Timeouts                `toml:"timeouts"`
+	Drivers   map[string]Driver       `toml:"drivers"`
+}
+
+type Driver struct {
+	Delivery Delivery `toml:"delivery"`
+}
+
+type Delivery struct {
+	Provider   string `toml:"provider"`
+	URL        string `toml:"url"`
+	SecretFile string `toml:"secret_file"`
 }
 
 type Skill struct {

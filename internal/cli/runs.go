@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"context"
-	"encoding/json"
-	"os"
 	"os/exec"
 	"slices"
 	"time"
@@ -15,7 +12,6 @@ import (
 	"shephrd/internal/execution"
 	"shephrd/internal/fault"
 	"shephrd/internal/guide"
-	"shephrd/internal/plugin"
 	"shephrd/internal/store"
 )
 
@@ -28,40 +24,11 @@ func (a *app) executor() (*execution.Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	self, err := os.Executable()
+	reg, err := a.registry()
 	if err != nil {
 		return nil, err
 	}
-	return &execution.Executor{
-		DB: db, Cfg: cfg, Self: self, Getenv: a.getenv, Harness: a.harness,
-		Guide: func(role string) (string, error) {
-			text, _, err := guide.Document(cfg, role)
-			return text, err
-		},
-	}, nil
-}
-
-func (a *app) harness(ctx context.Context, name string, req execution.HarnessRequest) (execution.HarnessCommand, error) {
-	if build, ok := execution.Builtin[name]; ok {
-		return build(req), nil
-	}
-	reg, err := a.registry()
-	if err != nil {
-		return execution.HarnessCommand{}, err
-	}
-	provider := reg.Provider("harness", name)
-	if provider == nil {
-		return execution.HarnessCommand{}, fault.New("unknown_harness", "harness %q is neither built in nor provided by a declared plugin", name)
-	}
-	out, err := reg.Call(ctx, provider, plugin.Call{Kind: "provide", Type: "harness", Body: req, Getenv: a.getenv})
-	if err != nil {
-		return execution.HarnessCommand{}, fault.New("plugin_failed", "harness %s: %v", name, err)
-	}
-	var command execution.HarnessCommand
-	if err := json.Unmarshal(out, &command); err != nil {
-		return execution.HarnessCommand{}, fault.New("plugin_failed", "harness %s answered invalidly: %v", name, err)
-	}
-	return command, nil
+	return execution.New(db, cfg, reg, a.getenv)
 }
 
 func runCommands(a *app) []*cobra.Command {
@@ -96,7 +63,11 @@ func taskRun(a *app, purpose string) *cobra.Command {
 			} else {
 				next.Model = target.Model
 			}
-			if err := a.checkHarness(next.Harness); err != nil {
+			reg, err := a.registry()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := execution.CheckHarness(reg, next.Harness); err != nil {
 				return nil, err
 			}
 			chosen = &next
@@ -113,20 +84,6 @@ func taskRun(a *app, purpose string) *cobra.Command {
 		})
 	})
 	return cmd
-}
-
-func (a *app) checkHarness(name string) error {
-	if _, ok := execution.Builtin[name]; ok {
-		return nil
-	}
-	reg, err := a.registry()
-	if err != nil {
-		return err
-	}
-	if reg.Provider("harness", name) == nil {
-		return fault.New("unknown_harness", "harness %q is neither built in nor provided by a declared plugin", name)
-	}
-	return nil
 }
 
 func taskStop(a *app) *cobra.Command {
