@@ -62,7 +62,7 @@ Put `shephrd` on your `PATH`. Every command prints one JSON object; help is the 
 5. **Give your main driver the skill.** For Claude Code: `mkdir -p ~/.claude/skills/shephrd && shephrd skill main | jq -r .text > ~/.claude/skills/shephrd/SKILL.md`. For a main driver in Pi, also install `share/shephrd/pi/shephrd-inbox.ts` as a Pi extension so inbox items arrive as turns.
 6. **Trust each repository once.** In a terminal presentation the harness runs its own interface, and Claude Code and Codex ask once per repository whether you trust it. Answer in the task's tab (Herdr marks it blocked), or open the harness in the repository once beforehand.
 
-Then ask your main driver for work in `my-tool`. It creates a sub-driver with `shephrd task create --role driver --repo my-tool`, which delegates to workers and reports back. With Herdr, each task appears as a tab labelled with its ID, role and title, showing the harness at work; a task keeps its tab across turns, and the tab closes when the task closes.
+Then ask your main driver for work in `my-tool`. It creates a sub-driver with `shephrd task create --role driver --repo my-tool`, which delegates to workers and reports back. With Herdr, each task appears as a tab labelled with its ID, role and title, showing the harness at work; a reported turn's tab closes after its process is proven gone, and a continuation opens a fresh tab while resuming the same harness session.
 
 ## Documentation
 

@@ -75,7 +75,7 @@ extend = "/path/to/house-rules.md"
 
 ### Receive results
 
-Results, questions and held tasks reach the main driver's inbox. `shephrd inbox` lists them; `shephrd inbox ack <item>` marks one handled. To have them pushed, configure a delivery for the driver:
+Results, questions and held tasks reach the main driver's inbox. `shephrd inbox` lists them; read the substantive report body and share its findings with the user, reading referenced artifacts when needed. `shephrd inbox ack <item>` marks an item handled, not the task done or its result accepted or delivered. A reported result makes a task done; acceptance and delivery remain separate explicit steps. To have them pushed, configure a delivery for the driver:
 
 ```toml
 [drivers.main.delivery]
@@ -150,7 +150,7 @@ merge_method = "squash"
 | Plugin | Provides |
 |---|---|
 | `github` | The forge for `pull_request` landing, through an authenticated `gh` CLI. |
-| `herdr`, `cmux` | Presentation: each task gets a terminal tab, labelled with its ID, role and title, where the harness runs its own interface for every turn. The tab closes when the task closes. Set `presentation = "herdr"` (or `"cmux"`) in the host's configuration. Herdr's options are `workspace`, a workspace label or ID that is created when missing (default `Shephrd tasks`), and `socket` when Herdr is not on its default socket. cmux needs `socket` and `window`, and its socket must accept outside processes: set its socket control to password mode and give the plugin `password`. |
+| `herdr`, `cmux` | Presentation: each task gets a terminal tab, labelled with its ID, role and title, where the harness runs its own interface for every turn. A reported turn's tab closes once its process is proven gone; continuation opens a fresh tab and resumes the same native harness session. Uncertain liveness or endpoint ownership leaves the tab open. Set `presentation = "herdr"` (or `"cmux"`) in the host's configuration. Herdr's options are `workspace`, a workspace label or ID that is created when missing (default `Shephrd tasks`), and `socket` when Herdr is not on its default socket. cmux needs `socket` and `window`, and its socket must accept outside processes: set its socket control to password mode and give the plugin `password`. |
 | `macos-notify` | A notification for each new inbox item. |
 
 The Pi extension `plugins/pi/shephrd-inbox.ts` (`share/shephrd/pi/` in the Nix package) is not a Shephrd plugin; install it into Pi for a main driver that runs in Pi. Shephrd's own sessions ignore it.

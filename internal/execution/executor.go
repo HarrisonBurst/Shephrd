@@ -274,13 +274,12 @@ func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coor
 			return fail(err)
 		}
 	}
-	var launched LaunchResponse
-	var reuse string
 	if interactive {
-		x.DB.QueryRowContext(ctx, `SELECT endpoint FROM runs WHERE task = ? AND id != ? AND endpoint != '' ORDER BY id DESC LIMIT 1`, t.ID, run.ID).Scan(&reuse)
+		x.CloseIdleTerminals(ctx, t.ID)
 	}
+	var launched LaunchResponse
 	err = host.Call(ctx, "launch", LaunchRequest{
-		RunDir: run.Dir, Brief: brief, Token: token, Title: label, Reuse: reuse,
+		RunDir: run.Dir, Brief: brief, Token: token, Title: label,
 		Spec: RunSpec{Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness, Interactive: interactive, Label: label},
 	}, &launched)
 	if err != nil {
@@ -416,6 +415,67 @@ func (x *Executor) Exited(ctx context.Context, runID int64, status int, session 
 	return err
 }
 
+func (x *Executor) CloseReportedTerminals(ctx context.Context) {
+	rows, err := x.DB.QueryContext(ctx, `SELECT DISTINCT r.task FROM runs r JOIN tasks t ON t.id = r.task WHERE r.endpoint != '' AND r.liveness = 'exited' AND (r.turn_reported = 1 OR t.state = 'closed')`)
+	if err != nil {
+		return
+	}
+	var tasks []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			tasks = append(tasks, id)
+		}
+	}
+	rows.Close()
+	for _, id := range tasks {
+		x.CloseIdleTerminals(ctx, id)
+	}
+}
+
+func (x *Executor) CloseIdleTerminals(ctx context.Context, taskID int64) {
+	runs, err := coord.Runs(x.DB, `task = ? AND endpoint != '' AND liveness = 'exited'`, taskID)
+	if err != nil {
+		return
+	}
+	var state string
+	if err := x.DB.QueryRowContext(ctx, `SELECT state FROM tasks WHERE id = ?`, taskID).Scan(&state); err != nil {
+		return
+	}
+	for _, r := range runs {
+		if (!r.TurnReported && state != "closed") || r.PID == 0 || r.Start == "" {
+			continue
+		}
+		var other int
+		if err := x.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE host = ? AND endpoint = ? AND id != ? AND (task != ? OR liveness != 'exited')`, r.Host, r.Endpoint, r.ID, taskID).Scan(&other); err != nil || other != 0 {
+			continue
+		}
+		host, err := x.Host(r.Host)
+		if err != nil {
+			continue
+		}
+		var process StateResponse
+		if err := host.Call(ctx, "probe", proc.Identity{PID: r.PID, Start: r.Start}, &process); err != nil || process.State != "exited" {
+			continue
+		}
+		if err := host.Call(ctx, "probe_group", StopRequest{PGID: r.PID}, &process); err != nil || process.State != "exited" {
+			continue
+		}
+		var shown PresentationResponse
+		if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: r.Endpoint}, &shown); err != nil {
+			continue
+		}
+		if shown.State == "present" {
+			if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "close", Endpoint: r.Endpoint}, nil); err != nil {
+				continue
+			}
+		} else if shown.State != "absent" {
+			continue
+		}
+		x.DB.ExecContext(ctx, `UPDATE runs SET endpoint = '' WHERE id = ? AND endpoint = ? AND liveness = 'exited'`, r.ID, r.Endpoint)
+	}
+}
+
 // Probe observes a run's liveness on its host and records what it finds.
 // An unreachable host makes the run unknown, never exited. A run whose
 // process is proven gone is exited, using its exit record when the
@@ -482,16 +542,23 @@ func (x *Executor) stopGroup(ctx context.Context, r *coord.Run) bool {
 	if err != nil {
 		return false
 	}
-	stopped := false
-	if r.PID != 0 {
-		var state StateResponse
-		stopped = host.Call(ctx, "stop", StopRequest{PGID: r.PID}, &state) == nil && state.State == "exited"
+	if r.PID == 0 {
+		return false
+	}
+	var state StateResponse
+	if err := host.Call(ctx, "stop", StopRequest{PGID: r.PID}, &state); err != nil || state.State != "exited" {
+		return false
 	}
 	if r.Endpoint != "" {
-		closed := host.Call(ctx, "presentation", PresentationRequest{Operation: "close", Endpoint: r.Endpoint}, nil) == nil
-		stopped = stopped || r.PID == 0 && closed
+		var other int
+		if err := x.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE host = ? AND endpoint = ? AND id != ? AND (task != ? OR liveness != 'exited')`, r.Host, r.Endpoint, r.ID, r.Task).Scan(&other); err == nil && other == 0 {
+			var shown PresentationResponse
+			if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: r.Endpoint}, &shown); err == nil && shown.State == "present" {
+				host.Call(ctx, "presentation", PresentationRequest{Operation: "close", Endpoint: r.Endpoint}, nil)
+			}
+		}
 	}
-	return stopped
+	return true
 }
 
 // Stop ends a task's current run: it signals the run's process group, and

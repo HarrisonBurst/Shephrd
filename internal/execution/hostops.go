@@ -40,7 +40,6 @@ type (
 		Spec   RunSpec `json:"spec"`
 		Token  string  `json:"token"`
 		Title  string  `json:"title,omitempty"`
-		Reuse  string  `json:"reuse,omitempty"`
 	}
 	RunDirRequest struct {
 		RunDir string `json:"run_dir"`
@@ -198,6 +197,15 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, err
 		}
 		return StateResponse{State: id.Probe()}, nil
+	case "probe_group":
+		req, err := decode[StopRequest](body)
+		if err != nil {
+			return nil, err
+		}
+		if proc.GroupAlive(req.PGID) {
+			return StateResponse{State: "live"}, nil
+		}
+		return StateResponse{State: "exited"}, nil
 	case "stop":
 		req, err := decode[StopRequest](body)
 		if err != nil {

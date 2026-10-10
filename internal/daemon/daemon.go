@@ -135,6 +135,7 @@ func (d *Daemon) pass(ctx context.Context) {
 			d.logf("reconcile: %v", err)
 		}
 	}
+	x.CloseReportedTerminals(ctx)
 	for _, step := range []struct {
 		name string
 		run  func() error
