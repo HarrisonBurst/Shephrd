@@ -9,9 +9,12 @@ import (
 	"shephrd/internal/fault"
 )
 
+// Origin is where a request came from: this machine, or SSH through serve,
+// whose forced command fixes a driver or plugin identity or a worker host.
 type Origin struct {
 	Local bool
 	As    string
+	Host  string
 }
 
 type Caller = coord.Caller
@@ -45,6 +48,9 @@ func (a *app) resolveCaller() (Caller, error) {
 			if err != nil {
 				return Caller{}, err
 			}
+			if !a.origin.Local && run.Host != a.origin.Host {
+				return Caller{}, fault.New("invalid_token", "the run token belongs to a run on another host")
+			}
 			if !strings.HasPrefix(a.req.Argv[0], "_") {
 				a.turnBudget(caller, run)
 			}
@@ -54,10 +60,10 @@ func (a *app) resolveCaller() (Caller, error) {
 	}
 	if a.origin.As != "" {
 		kind, name, _ := strings.Cut(a.origin.As, ":")
-		if kind != "driver" || !config.NamePattern.MatchString(name) {
+		if !(kind == "driver" || kind == "plugin" && !a.origin.Local) || !config.NamePattern.MatchString(name) {
 			return Caller{}, fault.New("usage", "--as takes driver:<name>, got %q", a.origin.As)
 		}
-		return Caller{Kind: "driver", Name: name, Operator: a.origin.Local}, nil
+		return Caller{Kind: kind, Name: name, Operator: a.origin.Local}, nil
 	}
 	if !a.origin.Local {
 		return Caller{}, fault.New("unidentified", "the request carries no identity")

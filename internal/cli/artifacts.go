@@ -5,6 +5,7 @@ import (
 
 	"shephrd/internal/artifact"
 	"shephrd/internal/coord"
+	"shephrd/internal/execution"
 	"shephrd/internal/fault"
 	"shephrd/internal/store"
 )
@@ -18,7 +19,7 @@ func (a *app) artifacts() (*artifact.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &artifact.Service{DB: db, Cfg: cfg}, nil
+	return &artifact.Service{DB: db, Cfg: cfg, Host: execution.Hosts(cfg, a.getenv)}, nil
 }
 
 // seal checks a run's result against its deliverable before it is recorded.
@@ -35,7 +36,11 @@ func (a *app) seal(caller Caller, t *coord.Task, body string, files []string) (*
 	if err != nil {
 		return nil, err
 	}
-	return artifact.Seal(cfg, t, attempt, body, files)
+	host, err := execution.Hosts(cfg, a.getenv)(attempt.Host)
+	if err != nil {
+		return nil, err
+	}
+	return artifact.Seal(a.ctx, cfg, host, t, attempt, body, files)
 }
 
 func deliveryCommands(a *app) []*cobra.Command {

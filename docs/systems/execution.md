@@ -15,7 +15,7 @@ Session execution turns coordination's decisions into running sessions. It prepa
 Every operation on a machine goes through that machine's **host agent**, the same `shephrd` binary:
 
 - On the home host, execution calls it in-process.
-- On a worker host, the home host connects over SSH with its own key, whose forced command on the worker host is `shephrd agent`. The agent accepts only host operations from the home host, using the same JSON request format and protocol version as [forwarded commands](commands.md#requests).
+- On a worker host, the home host connects over SSH with its own key, whose forced command on the worker host is `shephrd agent`. The agent accepts only host operations from the home host. Each operation is named in the SSH command with the protocol version and release, and its JSON request travels on stdin, so nothing secret appears in a process list.
 
 A worker host's agent reports its release version and the harness and presentation providers installed on it. Execution checks these before routing anything there. A host that cannot be reached makes every run on it `unknown`, never `exited`.
 

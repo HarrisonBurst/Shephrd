@@ -18,6 +18,8 @@ import (
 type Config struct {
 	Path      string                  `toml:"-"`
 	Host      string                  `toml:"host"`
+	Home      string                  `toml:"home"`
+	Hosts     map[string]HostConfig   `toml:"hosts"`
 	Driver    string                  `toml:"driver"`
 	MaxDepth  int                     `toml:"max_depth"`
 	Store     string                  `toml:"store"`
@@ -32,6 +34,11 @@ type Config struct {
 	Drivers   map[string]Driver       `toml:"drivers"`
 	Repos     map[string]Repo         `toml:"repos"`
 	Grants    []Grant                 `toml:"grants"`
+}
+
+// HostConfig names how the home host reaches a worker host over SSH.
+type HostConfig struct {
+	SSH string `toml:"ssh"`
 }
 
 type Repo struct {
@@ -158,8 +165,15 @@ func Load(getenv Getenv) (Config, error) {
 }
 
 func (c *Config) resolve(getenv Getenv) error {
-	if !NamePattern.MatchString(c.Host) {
-		return fault.New("invalid_config", "%s: host %q must match %s", c.Path, c.Host, NamePattern)
+	if c.Host != "" || c.Home == "" {
+		if !NamePattern.MatchString(c.Host) {
+			return fault.New("invalid_config", "%s: host %q must match %s", c.Path, c.Host, NamePattern)
+		}
+	}
+	for name, h := range c.Hosts {
+		if !NamePattern.MatchString(name) || h.SSH == "" || name == c.Host {
+			return fault.New("invalid_config", "%s: hosts.%s needs a name matching %s, other than this host, and an ssh target", c.Path, name, NamePattern)
+		}
 	}
 	if c.Driver != "" && !NamePattern.MatchString(c.Driver) {
 		return fault.New("invalid_config", "%s: driver %q must match %s", c.Path, c.Driver, NamePattern)
@@ -277,11 +291,20 @@ func (c *Config) resolve(getenv Getenv) error {
 	return nil
 }
 
-func Write(path, host, driver string) error {
+// Write creates a host's first configuration: a home host with its main
+// driver and that driver's standing grants, or a host whose commands go to
+// a home host over SSH.
+func Write(path, host, driver, home string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create configuration directory: %w", err)
 	}
 	body := fmt.Sprintf("host = %q\ndriver = %q\n\n[[grants]]\nto = \"driver:%s\"\nactions = [\"land\", \"discard\"]\n", host, driver, driver)
+	if home != "" {
+		body = fmt.Sprintf("home = %q\n", home)
+		if host != "" {
+			body = fmt.Sprintf("host = %q\n", host) + body
+		}
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("write configuration: %w", err)

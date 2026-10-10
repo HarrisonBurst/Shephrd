@@ -1,6 +1,7 @@
 package artifact
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -15,12 +16,10 @@ import (
 
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
+	"shephrd/internal/execution"
 	"shephrd/internal/fault"
-	"shephrd/internal/gitcmd"
 	"shephrd/internal/store"
 )
-
-const MaxFile = 10 << 20
 
 type Artifact struct {
 	ID      int64  `json:"-"`
@@ -71,106 +70,57 @@ func BlobPath(cfg *config.Config, digest string) string {
 	return filepath.Join(cfg.DataDir, "artifacts", "sha256", digest)
 }
 
-// Seal checks a result against the task's deliverable and captures it, so
-// a mistake comes back to the session as a refusal it can fix.
-func Seal(cfg *config.Config, t *coord.Task, a *coord.Attempt, text string, files []string) (*Artifact, error) {
+// Seal checks a result against the task's deliverable on the attempt's
+// host and captures it, so a mistake comes back to the session as a
+// refusal it can fix. Report files are stored on the home host.
+func Seal(ctx context.Context, cfg *config.Config, host execution.Host, t *coord.Task, a *coord.Attempt, text string, files []string) (*Artifact, error) {
 	sealed := &Artifact{Kind: t.Deliverable, Text: text}
 	if t.Role == "driver" {
 		if len(files) > 0 {
-			return nil, refuse("a sub-driver's workspace is read-only; report its result as text")
+			return nil, fault.New("result_refused", "a sub-driver's workspace is read-only; report its result as text")
 		}
 		return sealed, nil
 	}
-	switch t.Deliverable {
-	case "code":
-		if len(files) > 0 {
-			return nil, refuse("a code result is the committed branch; --file is for report results")
-		}
-		status, err := gitcmd.Run(a.Workspace, "status", "--porcelain")
+	var out execution.SealResponse
+	err := host.Call(ctx, "seal", execution.SealRequest{Deliverable: t.Deliverable, Workspace: a.Workspace, Branch: a.Branch, Base: a.Base, Files: files}, &out)
+	if err != nil {
+		return nil, err
+	}
+	if t.Deliverable == "code" {
+		sealed.Commit, sealed.Branch, sealed.Base = out.Commit, a.Branch, a.Base
+	}
+	for _, f := range out.Files {
+		digest, err := storeBlob(cfg, f.Content)
 		if err != nil {
 			return nil, err
 		}
-		if status != "" {
-			return nil, refuse("the workspace has uncommitted changes; commit everything on %s and report again:\n%s", a.Branch, status)
-		}
-		if head, err := gitcmd.Run(a.Workspace, "symbolic-ref", "--short", "HEAD"); err != nil || head != a.Branch {
-			return nil, refuse("HEAD must be on %s", a.Branch)
-		}
-		commit, err := gitcmd.Run(a.Workspace, "rev-parse", "HEAD")
-		if err != nil {
-			return nil, err
-		}
-		if count, err := gitcmd.Run(a.Workspace, "rev-list", "--count", a.Base+"..HEAD"); err != nil || count == "0" {
-			return nil, refuse("there are no commits beyond the base %s", a.Base)
-		}
-		sealed.Commit, sealed.Branch, sealed.Base = commit, a.Branch, a.Base
-	case "report":
-		if len(files) == 0 {
-			return nil, refuse("a report result names its documents with --file <path>")
-		}
-		for _, name := range files {
-			file, err := snapshot(cfg, a.Workspace, name)
-			if err != nil {
-				return nil, err
-			}
-			sealed.Files = append(sealed.Files, file)
-		}
+		sealed.Files = append(sealed.Files, File{Path: f.Path, Digest: digest, Size: int64(len(f.Content))})
 	}
 	return sealed, nil
 }
 
-func refuse(format string, args ...any) error {
-	return fault.New("result_refused", format, args...)
-}
-
-// snapshot copies one workspace file into the content-addressed store and
-// makes the copy read-only.
-func snapshot(cfg *config.Config, workspace, name string) (File, error) {
-	path := name
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workspace, name)
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return File{}, refuse("report file %s does not exist", name)
-	}
-	if !strings.HasPrefix(resolved, workspace+string(filepath.Separator)) {
-		return File{}, refuse("report file %s is outside the workspace", name)
-	}
-	info, err := os.Stat(resolved)
-	if err != nil || !info.Mode().IsRegular() {
-		return File{}, refuse("report file %s is not a regular file", name)
-	}
-	if info.Size() > MaxFile {
-		return File{}, refuse("report file %s is larger than %d bytes", name, MaxFile)
-	}
-	body, err := os.ReadFile(resolved)
-	if err != nil {
-		return File{}, err
-	}
+// storeBlob writes content into the content-addressed store, read-only.
+func storeBlob(cfg *config.Config, body []byte) (string, error) {
 	sum := sha256.Sum256(body)
 	digest := hex.EncodeToString(sum[:])
 	blob := BlobPath(cfg, digest)
-	if _, err := os.Stat(blob); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(filepath.Dir(blob), 0o700); err != nil {
-			return File{}, err
-		}
-		tmp, err := os.CreateTemp(filepath.Dir(blob), ".blob-")
-		if err != nil {
-			return File{}, err
-		}
-		if _, err := tmp.Write(body); err != nil {
-			tmp.Close()
-			return File{}, err
-		}
-		tmp.Chmod(0o444)
-		tmp.Close()
-		if err := os.Rename(tmp.Name(), blob); err != nil {
-			return File{}, err
-		}
+	if _, err := os.Stat(blob); err == nil {
+		return digest, nil
 	}
-	rel, _ := filepath.Rel(workspace, resolved)
-	return File{Path: rel, Digest: digest, Size: info.Size()}, nil
+	if err := os.MkdirAll(filepath.Dir(blob), 0o700); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(blob), ".blob-")
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	tmp.Chmod(0o444)
+	tmp.Close()
+	return digest, os.Rename(tmp.Name(), blob)
 }
 
 // Record stores a sealed artifact as its task's current result.
@@ -228,15 +178,19 @@ func Read(cfg *config.Config, a *Artifact, path string) (string, error) {
 
 // Inputs pins each dependency's current artifact into a starting attempt
 // and lists them for its brief. Report files are copied read-only beside
-// the workspace; pinned inputs never change afterwards.
-func Inputs(db *store.Store, cfg *config.Config) func(*coord.Task, *coord.Attempt) ([]string, error) {
-	return func(t *coord.Task, a *coord.Attempt) ([]string, error) {
+// the workspace on its host; pinned inputs never change afterwards.
+func Inputs(db *store.Store, cfg *config.Config, hosts func(string) (execution.Host, error)) func(context.Context, *coord.Task, *coord.Attempt) ([]string, error) {
+	return func(ctx context.Context, t *coord.Task, a *coord.Attempt) ([]string, error) {
 		var pinned int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM attempt_inputs WHERE task = ? AND attempt = ?`, t.ID, a.N).Scan(&pinned); err != nil {
 			return nil, err
 		}
 		if pinned == 0 {
-			if err := pin(db, cfg, t, a); err != nil {
+			host, err := hosts(a.Host)
+			if err != nil {
+				return nil, err
+			}
+			if err := pin(ctx, db, cfg, host, t, a); err != nil {
 				return nil, err
 			}
 		}
@@ -269,7 +223,7 @@ func Inputs(db *store.Store, cfg *config.Config) func(*coord.Task, *coord.Attemp
 	}
 }
 
-func pin(db *store.Store, cfg *config.Config, t *coord.Task, a *coord.Attempt) error {
+func pin(ctx context.Context, db *store.Store, cfg *config.Config, host execution.Host, t *coord.Task, a *coord.Attempt) error {
 	deps, err := coord.Query(db, `t.id IN (SELECT dependency FROM dependencies WHERE task = ?) AND t.artifact IS NOT NULL`, t.ID)
 	if err != nil {
 		return err
@@ -282,18 +236,14 @@ func pin(db *store.Store, cfg *config.Config, t *coord.Task, a *coord.Attempt) e
 		dir := ""
 		if art.Kind == "report" {
 			dir = filepath.Join(a.Workspace+".inputs", dep.Ref)
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return err
-			}
+			files := map[string][]byte{}
 			for _, f := range art.Files {
-				body, err := os.ReadFile(BlobPath(cfg, f.Digest))
-				if err != nil {
+				if files[f.Path], err = os.ReadFile(BlobPath(cfg, f.Digest)); err != nil {
 					return err
 				}
-				target := filepath.Join(dir, filepath.Base(f.Path))
-				if err := os.WriteFile(target, body, 0o444); err != nil {
-					return err
-				}
+			}
+			if err := host.Call(ctx, "pin_inputs", execution.PinRequest{Dir: dir, Files: files}, nil); err != nil {
+				return err
 			}
 		}
 		if _, err := db.Exec(`INSERT OR IGNORE INTO attempt_inputs (task, attempt, dependency, artifact, path) VALUES (?, ?, ?, ?, ?)`,

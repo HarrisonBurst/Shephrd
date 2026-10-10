@@ -38,7 +38,12 @@ type Daemon struct {
 
 	db            *store.Store
 	lastReconcile time.Time
+	probed        map[int64]time.Time
 }
+
+// remoteProbeEvery spaces out liveness probes of runs on worker hosts,
+// each of which is an SSH round trip.
+const remoteProbeEvery = 15 * time.Second
 
 func lockPath(cfg *config.Config) string {
 	return filepath.Join(cfg.DataDir, "daemon.lock")
@@ -119,7 +124,7 @@ func (d *Daemon) pass(ctx context.Context) {
 		d.logf("executor: %v", err)
 		return
 	}
-	x.Inputs = artifact.Inputs(d.db, &cfg)
+	x.Inputs = artifact.Inputs(d.db, &cfg, x.Host)
 	if err := d.pluginsChanged(ctx, reg); err != nil {
 		d.logf("plugins: %v", err)
 	}
@@ -151,7 +156,16 @@ func (d *Daemon) observe(ctx context.Context, x *execution.Executor, cfg *config
 	if err != nil {
 		return err
 	}
+	if d.probed == nil {
+		d.probed = map[int64]time.Time{}
+	}
 	for _, r := range runs {
+		if r.Host != cfg.Host {
+			if time.Since(d.probed[r.ID]) < remoteProbeEvery {
+				continue
+			}
+			d.probed[r.ID] = time.Now()
+		}
 		observed, err := x.Probe(ctx, r)
 		if err != nil {
 			d.logf("probe %s run %d: %v", coord.TaskRef(r.Task), r.Generation, err)

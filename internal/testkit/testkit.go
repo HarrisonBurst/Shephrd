@@ -182,6 +182,50 @@ func (e *Env) environ() []string {
 	return env
 }
 
+// SSHTarget is what one SSH target reaches: a forced command on another
+// simulated machine.
+type SSHTarget struct {
+	Command []string `json:"command"`
+	Home    string   `json:"home"`
+}
+
+// InstallSSH puts the fake ssh on PATH and declares the targets this
+// machine can reach.
+func (e *Env) InstallSSH(targets map[string]SSHTarget) {
+	e.t.Helper()
+	body, err := os.ReadFile(Tool(e.t, "./internal/testkit/fakessh", "fakessh"))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	dir := filepath.Join(e.Home, "sshbin")
+	os.MkdirAll(dir, 0o755)
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), body, 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	e.Path = append([]string{dir}, e.Path...)
+	encoded, _ := json.Marshal(targets)
+	os.MkdirAll(filepath.Join(e.Home, ".fakessh", "down"), 0o755)
+	os.MkdirAll(filepath.Join(e.Home, ".fakessh", "drop"), 0o755)
+	if err := os.WriteFile(filepath.Join(e.Home, ".fakessh", "targets.json"), encoded, 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// SSHDown makes a target unreachable from this machine, or reachable again.
+func (e *Env) SSHDown(target string, down bool) {
+	path := filepath.Join(e.Home, ".fakessh", "down", target)
+	if down {
+		os.WriteFile(path, nil, 0o600)
+	} else {
+		os.Remove(path)
+	}
+}
+
+// SSHDropOnce makes the next connection to a target drop after its command ran.
+func (e *Env) SSHDropOnce(target string) {
+	os.WriteFile(filepath.Join(e.Home, ".fakessh", "drop", target), nil, 0o600)
+}
+
 // InstallHarnesses puts the fake harness on PATH as claude, codex and pi.
 func (e *Env) InstallHarnesses() {
 	e.t.Helper()

@@ -2,12 +2,8 @@ package execution
 
 import (
 	"context"
-	"errors"
-	"io/fs"
-	"os"
 
 	"shephrd/internal/coord"
-	"shephrd/internal/gitcmd"
 	"shephrd/internal/store"
 )
 
@@ -46,23 +42,19 @@ func (x *Executor) Reconcile(ctx context.Context) (*Reconciled, error) {
 }
 
 func (x *Executor) classifyAllocation(ctx context.Context, a *coord.Attempt) string {
-	_, statErr := os.Lstat(a.Workspace)
-	if a.Branch == "" {
-		if statErr == nil {
-			return "held"
-		}
-		return "none"
-	}
-	var repo string
-	if err := x.DB.QueryRowContext(ctx, `SELECT r.path FROM repos r JOIN tasks t ON t.repo = r.id WHERE t.id = ?`, a.Task).Scan(&repo); err != nil {
+	host, err := x.Host(a.Host)
+	if err != nil {
 		return "unknown"
 	}
-	_, branchErr := gitcmd.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+a.Branch)
-	if errors.Is(statErr, fs.ErrNotExist) && branchErr != nil {
-		return "none"
+	var repo string
+	if a.Branch != "" {
+		if err := x.DB.QueryRowContext(ctx, `SELECT r.path FROM repos r JOIN tasks t ON t.repo = r.id WHERE t.id = ?`, a.Task).Scan(&repo); err != nil {
+			return "unknown"
+		}
 	}
-	if statErr == nil && VerifyWorkspace(repo, a.Workspace, a.Branch, "") == nil {
-		return "held"
+	var state StateResponse
+	if err := host.Call(ctx, "classify", VerifyRequest{Repo: repo, Path: a.Workspace, Branch: a.Branch}, &state); err != nil {
+		return "unknown"
 	}
-	return "unknown"
+	return state.State
 }

@@ -38,7 +38,7 @@ func (a *app) route(p *coord.Proposal, explicit config.Target) (config.Target, e
 	case target.Host == "":
 		target.Host = firstNonEmpty(cfg.Defaults.Host, cfg.Host)
 	}
-	if target.Host != cfg.Host {
+	if _, ok := cfg.Hosts[target.Host]; target.Host != cfg.Host && !ok {
 		return config.Target{}, fault.New("unknown_host", "host %q is not configured", target.Host)
 	}
 	if target.Harness == "" {

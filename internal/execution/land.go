@@ -1,4 +1,4 @@
-package artifact
+package execution
 
 import (
 	"os"
@@ -12,7 +12,7 @@ type Landed struct {
 	Tip      string   `json:"tip"`
 	Proof    string   `json:"proof"`
 	Source   string   `json:"source"`
-	Warnings []string `json:"-"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func hasRemote(repo string) bool {
@@ -37,10 +37,19 @@ func isAncestor(repo, ancestor, descendant string) bool {
 	return err == nil
 }
 
+type LandRequest struct {
+	Repo    string `json:"repo"`
+	Branch  string `json:"branch"`
+	Commit  string `json:"commit"`
+	Method  string `json:"method"`
+	Message string `json:"message"`
+}
+
 // LandDirect merges a sealed commit into the default branch without
 // touching the registered checkout: fast-forward only, or with a merge
 // commit made in a temporary worktree. It then proves the result.
-func LandDirect(repo, branch, commit, method, message, scratch string) (*Landed, error) {
+func LandDirect(req LandRequest, scratch string) (*Landed, error) {
+	repo, branch, commit, method, message := req.Repo, req.Branch, req.Commit, req.Method, req.Message
 	tip, err := branchTip(repo, branch)
 	if err != nil {
 		return nil, err

@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -20,25 +20,32 @@ import (
 )
 
 type Executor struct {
-	DB      *store.Store
-	Cfg     *config.Config
-	Self    string
-	Getenv  config.Getenv
-	Harness func(ctx context.Context, name string, req HarnessRequest) (HarnessCommand, error)
-	Guide   func(role string) (string, error)
+	DB     *store.Store
+	Cfg    *config.Config
+	Getenv config.Getenv
+	Host   func(name string) (Host, error)
+	Guide  func(role string) (string, error)
 	// Inputs lists a starting attempt's pinned inputs for its brief.
-	Inputs func(t *coord.Task, a *coord.Attempt) ([]string, error)
+	Inputs func(ctx context.Context, t *coord.Task, a *coord.Attempt) ([]string, error)
 	// Base chooses a new attempt's base when it stacks on a dependency.
 	Base func(t *coord.Task) (base string, stackedOn int64, err error)
+
+	info map[string]HostInfo
 }
 
 func New(db *store.Store, cfg *config.Config, reg *plugin.Registry, getenv config.Getenv) (*Executor, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
+	harness := Harnesses(reg, getenv)
+	hosts := Hosts(cfg, getenv)
 	return &Executor{
-		DB: db, Cfg: cfg, Self: self, Getenv: getenv, Harness: Harnesses(reg, getenv),
+		DB: db, Cfg: cfg, Getenv: getenv,
+		Host: func(name string) (Host, error) {
+			h, err := hosts(name)
+			if local, ok := h.(*Local); ok {
+				local.Env.Harness = harness
+				local.Env.Plugins = reg
+			}
+			return h, err
+		},
 		Guide: func(role string) (string, error) {
 			text, _, err := guide.Document(cfg, role)
 			return text, err
@@ -52,18 +59,26 @@ type Started struct {
 	Run     *coord.Run     `json:"run"`
 }
 
-func (x *Executor) workspacePath(t *coord.Task, n int64) string {
-	repo := t.Repo
-	if repo == "" {
-		repo = "general"
+// HostInfo asks a host for its release, data directory and providers once
+// per executor. A host on another release is refused before anything is
+// created there.
+func (x *Executor) HostInfo(ctx context.Context, name string) (Host, HostInfo, error) {
+	h, err := x.Host(name)
+	if err != nil {
+		return nil, HostInfo{}, err
 	}
-	return filepath.Join(x.Cfg.DataDir, "workspaces", repo, fmt.Sprintf("%s-%d", t.Ref, n))
-}
-
-func (x *Executor) runDir(t *coord.Task) func(int64) string {
-	return func(generation int64) string {
-		return filepath.Join(x.Cfg.DataDir, "runs", t.Ref, strconv.FormatInt(generation, 10))
+	if info, ok := x.info[name]; ok {
+		return h, info, nil
 	}
+	var info HostInfo
+	if err := h.Call(ctx, "info", struct{}{}, &info); err != nil {
+		return nil, HostInfo{}, err
+	}
+	if x.info == nil {
+		x.info = map[string]HostInfo{}
+	}
+	x.info[name] = info
+	return h, info, nil
 }
 
 func (x *Executor) write(ctx context.Context, fn func(*store.Tx) error) error {
@@ -74,8 +89,32 @@ func (x *Executor) write(ctx context.Context, fn func(*store.Tx) error) error {
 // and retry create a new attempt and workspace; resume, continue and nudge
 // reuse the current attempt's workspace exactly.
 func (x *Executor) Start(ctx context.Context, caller string, taskID int64, purpose string, target *config.Target) (*Started, error) {
-	var t *coord.Task
+	t, err := coord.Load(x.DB, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if err := coord.CheckRunnable(x.DB, t, purpose); err != nil {
+		return nil, err
+	}
+	chosen := t.Target
+	if target != nil {
+		chosen = *target
+	}
+	host, info, err := x.HostInfo(ctx, chosen.Host)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(info.Harnesses, chosen.Harness) {
+		return nil, fault.New("unknown_harness", "host %s has no harness %q installed; it has %v", chosen.Host, chosen.Harness, info.Harnesses)
+	}
+	runDir := func(t *coord.Task) func(int64) string {
+		return func(generation int64) string {
+			return filepath.Join(info.DataDir, "runs", t.Ref, strconv.FormatInt(generation, 10))
+		}
+	}
 	var a *coord.Attempt
+	var run *coord.Run
+	var token string
 	if purpose == "start" || purpose == "retry" {
 		var repo coord.Repo
 		var base string
@@ -93,15 +132,16 @@ func (x *Executor) Start(ctx context.Context, caller string, taskID int64, purpo
 					return err
 				}
 			}
-			chosen := t.Target
-			if target != nil {
-				chosen = *target
-			}
 			a, err = coord.AllocateAttempt(tx, t, chosen, func(n int64) (string, string) {
-				if t.RepoID == 0 {
-					return x.workspacePath(t, n), ""
+				name := t.Repo
+				if name == "" {
+					name = "general"
 				}
-				return x.workspacePath(t, n), fmt.Sprintf("shephrd/%s/%d", t.Ref, n)
+				path := filepath.Join(info.DataDir, "workspaces", name, fmt.Sprintf("%s-%d", t.Ref, n))
+				if t.RepoID == 0 {
+					return path, ""
+				}
+				return path, fmt.Sprintf("shephrd/%s/%d", t.Ref, n)
 			}, stackedOn)
 			if err != nil || t.RepoID == 0 {
 				return err
@@ -111,7 +151,10 @@ func (x *Executor) Start(ctx context.Context, caller string, taskID int64, purpo
 		if err != nil {
 			return nil, err
 		}
-		base, err = PrepareWorkspace(WorkspaceSpec{Repo: repo.Path, DefaultBranch: repo.DefaultBranch, Path: a.Workspace, Branch: a.Branch, Base: base})
+		var prepared struct {
+			Base string `json:"base"`
+		}
+		err = host.Call(ctx, "prepare_workspace", WorkspaceSpec{Repo: repo.Path, DefaultBranch: repo.DefaultBranch, Path: a.Workspace, Branch: a.Branch, Base: base}, &prepared)
 		if err != nil {
 			var werr *WorkspaceError
 			if !errors.As(err, &werr) {
@@ -120,14 +163,12 @@ func (x *Executor) Start(ctx context.Context, caller string, taskID int64, purpo
 			x.write(ctx, func(tx *store.Tx) error { return coord.SetWorkspaceState(tx, caller, a, werr.State, "") })
 			return nil, werr.Err
 		}
-		var run *coord.Run
-		var token string
 		err = x.write(ctx, func(tx *store.Tx) error {
 			var err error
 			if t, err = coord.Load(tx, taskID); err != nil {
 				return err
 			}
-			if err := coord.SetWorkspaceState(tx, caller, a, "held", base); err != nil {
+			if err := coord.SetWorkspaceState(tx, caller, a, "held", prepared.Base); err != nil {
 				return err
 			}
 			if err := coord.CheckRunnable(tx, t, purpose); err != nil {
@@ -136,26 +177,21 @@ func (x *Executor) Start(ctx context.Context, caller string, taskID int64, purpo
 			if err := coord.AdoptAttempt(tx, caller, t, a); err != nil {
 				return err
 			}
-			run, token, err = coord.BeginRun(tx, caller, t, purpose, x.runDir(t))
+			run, token, err = coord.BeginRun(tx, caller, t, purpose, runDir(t))
 			return err
 		})
 		if err != nil {
 			return nil, err
 		}
 		if repo.Setup != "" {
-			if err := os.MkdirAll(run.Dir, 0o700); err != nil {
-				return nil, err
-			}
-			if err := RunSetup(a.Workspace, repo.Setup, filepath.Join(run.Dir, "setup.log"), []string{"PATH=" + x.Getenv("PATH"), "HOME=" + x.Getenv("HOME")}); err != nil {
+			if err := host.Call(ctx, "setup", SetupRequest{Path: a.Workspace, Command: repo.Setup, Log: filepath.Join(run.Dir, "setup.log")}, nil); err != nil {
 				x.abandon(ctx, run, "setup_failed")
 				return nil, err
 			}
 		}
-		return x.launch(ctx, t, a, run, token)
+		return x.launch(ctx, host, t, a, run, token)
 	}
-	var run *coord.Run
-	var token string
-	err := x.write(ctx, func(tx *store.Tx) error {
+	err = x.write(ctx, func(tx *store.Tx) error {
 		var err error
 		if t, err = coord.Load(tx, taskID); err != nil {
 			return err
@@ -169,7 +205,7 @@ func (x *Executor) Start(ctx context.Context, caller string, taskID int64, purpo
 		if a.WorkspaceState != "held" {
 			return fault.New("workspace_unavailable", "%s attempt %d workspace is %s", t.Ref, a.N, a.WorkspaceState).WithNext("task", "retry", t.Ref)
 		}
-		run, token, err = coord.BeginRun(tx, caller, t, purpose, x.runDir(t))
+		run, token, err = coord.BeginRun(tx, caller, t, purpose, runDir(t))
 		return err
 	})
 	if err != nil {
@@ -178,34 +214,28 @@ func (x *Executor) Start(ctx context.Context, caller string, taskID int64, purpo
 	if a.Branch != "" {
 		var repoPath string
 		x.DB.QueryRowContext(ctx, `SELECT path FROM repos WHERE id = ?`, t.RepoID).Scan(&repoPath)
-		if err := VerifyWorkspace(repoPath, a.Workspace, a.Branch, a.Base); err != nil {
-			x.write(ctx, func(tx *store.Tx) error {
-				return coord.SetWorkspaceState(tx, "system", a, "unknown", "")
-			})
-			x.abandon(ctx, run, "workspace_mismatch")
+		if err := host.Call(ctx, "verify_workspace", VerifyRequest{Repo: repoPath, Path: a.Workspace, Branch: a.Branch, Base: a.Base}, nil); err != nil {
+			if fault.As(err).Kind == "workspace_mismatch" {
+				x.write(ctx, func(tx *store.Tx) error { return coord.SetWorkspaceState(tx, "system", a, "unknown", "") })
+			}
+			x.abandon(ctx, run, fault.As(err).Kind)
 			return nil, err
 		}
 	}
-	return x.launch(ctx, t, a, run, token)
+	return x.launch(ctx, host, t, a, run, token)
 }
 
-func (x *Executor) launch(ctx context.Context, t *coord.Task, a *coord.Attempt, run *coord.Run, token string) (*Started, error) {
+func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coord.Attempt, run *coord.Run, token string) (*Started, error) {
 	fail := func(err error) (*Started, error) {
 		x.abandon(ctx, run, "start_failed")
 		return nil, fault.New("start_failed", "%v", err).WithNext("task", "log", t.Ref)
-	}
-	if err := os.MkdirAll(run.Dir, 0o700); err != nil {
-		return fail(err)
 	}
 	brief, err := x.brief(ctx, t, a, run)
 	if err != nil {
 		return fail(err)
 	}
-	if err := os.WriteFile(BriefPath(run.Dir), []byte(brief), 0o600); err != nil {
-		return fail(err)
-	}
 	if t.Role == "driver" {
-		if err := SetReadOnly(a.Workspace, true); err != nil {
+		if err := host.Call(ctx, "read_only", ReadOnlyRequest{Path: a.Workspace, ReadOnly: true}, nil); err != nil {
 			return fail(err)
 		}
 	}
@@ -213,10 +243,11 @@ func (x *Executor) launch(ctx context.Context, t *coord.Task, a *coord.Attempt, 
 	if a.Session != "" {
 		mode = "resume"
 	}
-	command, err := x.Harness(ctx, a.Harness, HarnessRequest{
+	var command HarnessCommand
+	err = host.Call(ctx, "harness", HarnessCall{Name: a.Harness, Request: HarnessRequest{
 		Mode: mode, ReadOnly: t.Role == "driver", Brief: BriefPath(run.Dir), Prompt: brief,
 		Workspace: a.Workspace, Model: a.Model, Session: a.Session, Title: t.Ref + " " + t.Title,
-	})
+	}}, &command)
 	if err != nil {
 		return fail(err)
 	}
@@ -232,10 +263,11 @@ func (x *Executor) launch(ctx context.Context, t *coord.Task, a *coord.Attempt, 
 			return fail(err)
 		}
 	}
-	id, err := Launch(run.Dir, RunSpec{
-		Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness,
-		Shephrd: x.Self, Config: x.Cfg.Path, Path: x.Getenv("PATH"), Home: x.Getenv("HOME"),
-	}, token)
+	var id proc.Identity
+	err = host.Call(ctx, "launch", LaunchRequest{
+		RunDir: run.Dir, Brief: brief, Token: token,
+		Spec: RunSpec{Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness},
+	}, &id)
 	if err != nil {
 		return fail(err)
 	}
@@ -298,7 +330,7 @@ func (x *Executor) brief(ctx context.Context, t *coord.Task, a *coord.Attempt, r
 	}
 	since, err := x.DB.EventsWhere(ctx, `WHERE seq > ? AND seq <= ? AND caller != ?
 		AND (task = ? OR task IN (SELECT id FROM tasks WHERE parent = ?))
-		AND name IN ('task.message', 'task.reply', 'task.question', 'task.result', 'task.blocker', 'task.state', 'dependency.changed', 'task.ready')
+		AND name IN ('task.message', 'task.reply', 'task.question', 'task.result', 'task.blocker', 'task.state', 'dependency.changed', 'task.ready', 'workspace.retained')
 		ORDER BY seq DESC LIMIT 101`, from, run.FromSeq, "task:"+t.Ref, t.ID, t.ID)
 	if err != nil {
 		return "", err
@@ -306,17 +338,13 @@ func (x *Executor) brief(ctx context.Context, t *coord.Task, a *coord.Attempt, r
 	if len(since) > 100 {
 		since, in.truncated = since[:100], true
 	}
-	for i, j := 0, len(since)-1; i < j; i, j = i+1, j-1 {
-		since[i], since[j] = since[j], since[i]
-	}
+	slices.Reverse(since)
 	in.since = since
 	notes, err := x.DB.EventsWhere(ctx, `WHERE task = ? AND name = 'task.note' ORDER BY seq DESC LIMIT 5`, t.ID)
 	if err != nil {
 		return "", err
 	}
-	for i, j := 0, len(notes)-1; i < j; i, j = i+1, j-1 {
-		notes[i], notes[j] = notes[j], notes[i]
-	}
+	slices.Reverse(notes)
 	in.notes = notes
 	if t.Role == "driver" {
 		requests, err := coord.Requests(x.DB, t.ID)
@@ -340,7 +368,7 @@ func (x *Executor) brief(ctx context.Context, t *coord.Task, a *coord.Attempt, r
 		}
 	}
 	if x.Inputs != nil {
-		if in.inputs, err = x.Inputs(t, a); err != nil {
+		if in.inputs, err = x.Inputs(ctx, t, a); err != nil {
 			return "", err
 		}
 	}
@@ -368,7 +396,8 @@ func (x *Executor) Exited(ctx context.Context, runID int64, status int, session 
 	return err
 }
 
-// Probe observes a run's liveness and records what it finds. A run whose
+// Probe observes a run's liveness on its host and records what it finds.
+// An unreachable host makes the run unknown, never exited. A run whose
 // process is proven gone is exited, using its exit record when the
 // supervisor left one; a run with no exit record was lost.
 func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
@@ -376,9 +405,13 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		return "exited", nil
 	}
 	observed := "unknown"
+	host, hostErr := x.Host(r.Host)
 	switch {
-	case r.PID != 0:
-		observed = proc.Identity{PID: r.PID, Start: r.Start}.Probe()
+	case r.PID != 0 && hostErr == nil:
+		var state StateResponse
+		if host.Call(ctx, "probe", proc.Identity{PID: r.PID, Start: r.Start}, &state) == nil {
+			observed = state.State
+		}
 	case r.Liveness == "starting":
 		started, _ := time.Parse("2006-01-02T15:04:05.000000000Z", r.Started)
 		if time.Since(started) < 2*time.Minute {
@@ -389,8 +422,12 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		err := x.write(ctx, func(tx *store.Tx) error { return coord.SetLiveness(tx, r, observed) })
 		return observed, err
 	}
-	if record, ok := ReadExit(r.Dir); ok {
-		return "exited", x.Exited(ctx, r.ID, record.Status, record.Session)
+	var exit ExitResponse
+	if err := host.Call(ctx, "exit_record", RunDirRequest{RunDir: r.Dir}, &exit); err != nil {
+		return "unknown", nil
+	}
+	if exit.Found {
+		return "exited", x.Exited(ctx, r.ID, exit.Record.Status, exit.Record.Session)
 	}
 	err := x.write(ctx, func(tx *store.Tx) error {
 		if _, err := tx.Exec(`UPDATE runs SET stop_reason = 'lost' WHERE id = ? AND stop_reason = ''`, r.ID); err != nil {
@@ -412,6 +449,17 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 	return "exited", err
 }
 
+// stopGroup stops a run's process group on its host and reports whether
+// the group is confirmed gone.
+func (x *Executor) stopGroup(ctx context.Context, r *coord.Run) bool {
+	host, err := x.Host(r.Host)
+	if err != nil || r.PID == 0 {
+		return false
+	}
+	var state StateResponse
+	return host.Call(ctx, "stop", StopRequest{PGID: r.PID}, &state) == nil && state.State == "exited"
+}
+
 // Stop ends a task's current run: it signals the run's process group, and
 // counts the run stopped only once the group is confirmed gone.
 func (x *Executor) Stop(ctx context.Context, t *coord.Task, reason string) (*coord.Run, error) {
@@ -427,7 +475,7 @@ func (x *Executor) Stop(ctx context.Context, t *coord.Task, reason string) (*coo
 			return nil, err
 		}
 		r.StopReason = reason
-		if r.PID == 0 || !proc.StopGroup(r.PID, 5*time.Second) {
+		if !x.stopGroup(ctx, r) {
 			err := x.write(ctx, func(tx *store.Tx) error {
 				if err := coord.SetLiveness(tx, r, "unknown"); err != nil {
 					return err
@@ -464,4 +512,14 @@ func (x *Executor) Stop(ctx context.Context, t *coord.Task, reason string) (*coo
 		return fault.New("not_running", "%s is %s; there is nothing to stop", t.Ref, t.State)
 	})
 	return r, err
+}
+
+// Log reads the end of a run's session log from its host.
+func (x *Executor) Log(ctx context.Context, r *coord.Run, limit int64) (LogResponse, error) {
+	host, err := x.Host(r.Host)
+	if err != nil {
+		return LogResponse{}, err
+	}
+	var out LogResponse
+	return out, host.Call(ctx, "read_log", RunDirRequest{RunDir: r.Dir, Limit: limit}, &out)
 }

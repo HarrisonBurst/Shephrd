@@ -21,9 +21,10 @@ import (
 	"shephrd/internal/fault"
 	"shephrd/internal/plugin"
 	"shephrd/internal/store"
+	"shephrd/internal/version"
 )
 
-const Protocol = 1
+const Protocol = version.Protocol
 
 type Request struct {
 	V         int       `json:"v"`
@@ -46,8 +47,13 @@ type Response struct {
 }
 
 func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv config.Getenv) int {
-	if len(args) == 2 && args[0] == "_run" {
+	switch {
+	case len(args) == 2 && args[0] == "_run":
 		return execution.Supervise(args[1])
+	case len(args) == 1 && args[0] == "agent":
+		return agent(ctx, stdin, stdout, getenv)
+	case len(args) > 0 && args[0] == "serve":
+		return serve(ctx, args[1:], stdin, stdout, stderr, getenv)
 	}
 	if isHelp(args) {
 		root := newRoot(nil)
@@ -67,6 +73,9 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		key = uuid.NewString()
 	}
 	req := Request{V: Protocol, Argv: argv, Key: key, RunToken: getenv("SHEPHRD_RUN_TOKEN"), CallToken: getenv("SHEPHRD_CALL_TOKEN"), Stdin: stdin}
+	if cfg, err := config.Load(getenv); err == nil && cfg.Home != "" && len(argv) > 0 && argv[0] != "init" && argv[0] != "version" {
+		return forward(ctx, &cfg, req, as, stdin, stdout, stderr, getenv)
+	}
 	return Run(ctx, Origin{Local: true, As: as}, req, getenv, stdout, stderr)
 }
 
