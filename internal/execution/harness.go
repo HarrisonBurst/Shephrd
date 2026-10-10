@@ -134,7 +134,7 @@ func codexSession(logPath string) string {
 // recorded for its workspace since the run started.
 func codexInteractiveSession(home, workspace string, since time.Time) string {
 	files, _ := filepath.Glob(filepath.Join(home, ".codex", "sessions", "*", "*", "*", "rollout-*.jsonl"))
-	newest, newestTime := "", since
+	newest, newestTime := "", since.Add(-time.Second)
 	for _, path := range files {
 		info, err := os.Stat(path)
 		if err != nil || info.ModTime().Before(newestTime) {
