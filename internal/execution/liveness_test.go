@@ -176,6 +176,10 @@ func TestFailedStopPreservesUnknownLivenessOnClosedStates(t *testing.T) {
 			if err != nil || currentTask.State != state {
 				t.Fatalf("task: %+v, %v", currentTask, err)
 			}
+			items, err := coord.Items(db, `i.state = 'pending'`)
+			if err != nil || len(items) != 1 {
+				t.Fatalf("owner notification: %v, %v", items, err)
+			}
 		})
 	}
 }

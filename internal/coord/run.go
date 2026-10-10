@@ -334,8 +334,20 @@ func SetLiveness(tx *store.Tx, r *Run, liveness string) error {
 	if _, err := tx.Exec(`UPDATE runs SET liveness = ? WHERE id = ?`, liveness, r.ID); err != nil {
 		return err
 	}
-	_, err := tx.Emit("run.liveness", "system", r.Task, r.Attempt, r.ID, map[string]string{"run": strconv.FormatInt(r.Generation, 10), "from": from, "to": liveness})
-	return err
+	seq, err := tx.Emit("run.liveness", "system", r.Task, r.Attempt, r.ID, map[string]string{"run": strconv.FormatInt(r.Generation, 10), "from": from, "to": liveness})
+	if err != nil {
+		return err
+	}
+	if liveness == "unknown" {
+		t, err := Load(tx, r.Task)
+		if err != nil {
+			return err
+		}
+		if t.State != "running" && t.State != "waiting" {
+			return WakeOwner(tx, t, seq)
+		}
+	}
+	return nil
 }
 
 // RecordExit marks a run exited and applies what its exit means. It
