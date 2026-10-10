@@ -54,7 +54,9 @@ type (
 		Found  bool       `json:"found"`
 	}
 	StopRequest struct {
-		PGID int `json:"pgid"`
+		PGID  int    `json:"pgid"`
+		PID   int    `json:"pid"`
+		Start string `json:"start"`
 	}
 	RemoveRequest struct {
 		Repo   string   `json:"repo"`
@@ -207,7 +209,7 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, err
 		}
 		state := "unknown"
-		if proc.StopGroup(req.PGID, 5*time.Second) {
+		if req.PID > 0 && req.Start != "" && (proc.Identity{PID: req.PID, Start: req.Start}).Probe() == "live" && req.PGID == req.PID && proc.StopGroup(req.PGID, 5*time.Second) {
 			state = "exited"
 		}
 		return StateResponse{State: state}, nil

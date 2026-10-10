@@ -61,10 +61,15 @@ func (x *Executor) Interrupt(ctx context.Context, r *coord.Run, reason string) e
 				return err
 			}
 			t, err := coord.Load(tx, r.Task)
-			if err != nil || t.State == "held" {
+			if err != nil {
 				return err
 			}
-			return coord.Hold(tx, t, reason)
+			switch t.State {
+			case "running", "waiting":
+				return coord.Hold(tx, t, reason)
+			default:
+				return nil
+			}
 		})
 	}
 	session := x.stoppedSession(ctx, r)

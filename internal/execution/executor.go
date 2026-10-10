@@ -411,12 +411,28 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		return "exited", nil
 	}
 	observed := "unknown"
+	holdReason := ""
 	host, hostErr := x.Host(r.Host)
 	switch {
 	case r.PID != 0 && hostErr == nil:
 		var state StateResponse
 		if host.Call(ctx, "probe", proc.Identity{PID: r.PID, Start: r.Start}, &state) == nil {
 			observed = state.State
+			if observed == "unknown" {
+				holdReason = "lost"
+			}
+		}
+	case (r.Liveness == "starting" || r.Liveness == "unknown") && r.PID == 0 && hostErr == nil:
+		var exit ExitResponse
+		if host.Call(ctx, "exit_record", RunDirRequest{RunDir: r.Dir}, &exit) == nil && exit.Found {
+			return "exited", x.Exited(ctx, r.ID, exit.Record.Status, exit.Record.Session)
+		}
+		if r.Liveness == "starting" {
+			started, _ := time.Parse("2006-01-02T15:04:05.000000000Z", r.Started)
+			if time.Since(started) < 2*time.Minute {
+				return "starting", nil
+			}
+			holdReason = "start_failed"
 		}
 	case r.Liveness == "starting":
 		started, _ := time.Parse("2006-01-02T15:04:05.000000000Z", r.Started)
@@ -425,6 +441,9 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		}
 	}
 	if observed != "exited" {
+		if holdReason != "" {
+			return observed, x.markUnknown(ctx, r, holdReason)
+		}
 		err := x.write(ctx, func(tx *store.Tx) error { return coord.SetLiveness(tx, r, observed) })
 		return observed, err
 	}
@@ -457,6 +476,24 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 	return "exited", err
 }
 
+func (x *Executor) markUnknown(ctx context.Context, r *coord.Run, reason string) error {
+	return x.write(ctx, func(tx *store.Tx) error {
+		if err := coord.SetLiveness(tx, r, "unknown"); err != nil {
+			return err
+		}
+		t, err := coord.Load(tx, r.Task)
+		if err != nil {
+			return err
+		}
+		switch t.State {
+		case "running", "waiting":
+			return coord.Hold(tx, t, reason)
+		default:
+			return nil
+		}
+	})
+}
+
 // stopGroup stops a run's process group on its host and reports whether
 // the group is confirmed gone.
 func (x *Executor) stopGroup(ctx context.Context, r *coord.Run) bool {
@@ -476,11 +513,15 @@ func (x *Executor) stopGroup(ctx context.Context, r *coord.Run) bool {
 		}
 		r.PID, r.Start = fresh.PID, fresh.Start
 	}
-	if r.PID == 0 {
+	if r.PID == 0 || r.Start == "" {
+		return false
+	}
+	var identity StateResponse
+	if err := host.Call(ctx, "probe", proc.Identity{PID: r.PID, Start: r.Start}, &identity); err != nil || identity.State != "live" {
 		return false
 	}
 	var state StateResponse
-	if err := host.Call(ctx, "stop", StopRequest{PGID: r.PID}, &state); err != nil || state.State != "exited" {
+	if err := host.Call(ctx, "stop", StopRequest{PGID: r.PID, PID: r.PID, Start: r.Start}, &state); err != nil || state.State != "exited" {
 		return false
 	}
 	return true
@@ -519,10 +560,15 @@ func (x *Executor) Stop(ctx context.Context, t *coord.Task, reason string) (*coo
 					return err
 				}
 				t, err := coord.Load(tx, t.ID)
-				if err != nil || t.State == "held" {
+				if err != nil {
 					return err
 				}
-				return coord.Hold(tx, t, reason)
+				switch t.State {
+				case "running", "waiting":
+					return coord.Hold(tx, t, reason)
+				default:
+					return nil
+				}
 			})
 			if err != nil {
 				return nil, err

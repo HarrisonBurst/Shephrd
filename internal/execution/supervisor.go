@@ -112,6 +112,9 @@ func Supervise(runDir string) int {
 	}
 	if err := spec.shephrd(token, "_started", "--pid", strconv.Itoa(self.PID), "--start", self.Start); err != nil {
 		fmt.Fprintln(os.Stderr, "record start:", err)
+		if writeErr := writeExitRecord(runDir, ExitRecord{Status: 1, Time: time.Now().UTC().Format(time.RFC3339)}); writeErr != nil {
+			fmt.Fprintln(os.Stderr, "write exit record:", writeErr)
+		}
 		return 1
 	}
 	log, err := os.OpenFile(LogPath(runDir), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
@@ -158,17 +161,13 @@ func Supervise(runDir string) int {
 	}
 	hold := false
 	if spec.Interactive {
-		out, err := spec.shephrdOutput(token, "_turn")
-		var turn struct {
-			Ended bool `json:"ended"`
-		}
-		hold = err != nil || json.Unmarshal(out, &turn) != nil || !turn.Ended
+		ended, err := spec.turnEnded(token)
+		hold = err != nil || !ended
 		if hold {
 			fmt.Printf("\nShephrd run ended without a completed report. Read its log: shephrd task log %s\nPress Enter to leave this terminal.\n", filepath.Base(filepath.Dir(runDir)))
 		}
 	}
-	out, _ := json.Marshal(record)
-	if err := os.WriteFile(ExitPath(runDir), out, 0o600); err != nil {
+	if err := writeExitRecord(runDir, record); err != nil {
 		fmt.Fprintln(os.Stderr, "write exit record:", err)
 		return 1
 	}
@@ -195,6 +194,29 @@ func (s RunSpec) shephrdOutput(token string, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("shephrd %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
+}
+
+func (s RunSpec) turnEnded(token string) (bool, error) {
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		out, err := s.shephrdOutput(token, "_turn")
+		if err == nil {
+			var turn struct {
+				Ended bool `json:"ended"`
+			}
+			if err := json.Unmarshal(out, &turn); err == nil {
+				return turn.Ended, nil
+			} else {
+				last = err
+			}
+		} else {
+			last = err
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		}
+	}
+	return false, last
 }
 
 // endTurn ends an interactive harness once its turn is reported, or once
@@ -226,6 +248,14 @@ func (s RunSpec) endTurn(token string, harness *os.Process, done <-chan struct{}
 		}
 		return
 	}
+}
+
+func writeExitRecord(runDir string, record ExitRecord) error {
+	body, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ExitPath(runDir), body, 0o600)
 }
 
 func ReadExit(runDir string) (ExitRecord, bool) {
