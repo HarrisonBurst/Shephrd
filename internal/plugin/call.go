@@ -67,8 +67,12 @@ func (r *Registry) Call(ctx context.Context, p *Plugin, call Call) (json.RawMess
 	}
 	cmd := exec.CommandContext(ctx, exe, p.Manifest.Exec[1:]...)
 	cmd.Dir = p.Dir
+	path := call.Getenv("PATH")
+	if self, err := os.Executable(); err == nil {
+		path = filepath.Dir(self) + ":" + path
+	}
 	cmd.Env = []string{
-		"PATH=" + call.Getenv("PATH"),
+		"PATH=" + path,
 		"HOME=" + call.Getenv("HOME"),
 		"SHEPHRD_PLUGIN=" + p.Name,
 		"SHEPHRD_CONFIG=" + r.cfg.Path,
