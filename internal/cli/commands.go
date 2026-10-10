@@ -28,7 +28,11 @@ func newRoot(a *app) *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().String("as", "", "act as driver:<name> (operator only, local only)")
 	root.PersistentFlags().String("key", "", "idempotency key for a mutation; generated when absent")
-	root.AddCommand(initCommand(a), versionCommand(a), repoCommand(a))
+	root.AddCommand(initCommand(a), versionCommand(a), repoCommand(a), eventsCommand(a), pluginCommand(a))
+	a.reserved = []string{"help"}
+	for _, cmd := range root.Commands() {
+		a.reserved = append(a.reserved, cmd.Name())
+	}
 	return root
 }
 

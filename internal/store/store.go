@@ -152,6 +152,41 @@ func (tx *Tx) Emit(name, caller string, task, attempt, run int64, data any) (int
 	return result.LastInsertId()
 }
 
+type Event struct {
+	Seq     int64           `json:"seq"`
+	Name    string          `json:"name"`
+	Time    string          `json:"time"`
+	Task    string          `json:"task,omitempty"`
+	Attempt int64           `json:"attempt,omitempty"`
+	Run     int64           `json:"run,omitempty"`
+	Caller  string          `json:"caller"`
+	Data    json.RawMessage `json:"data"`
+	TaskID  int64           `json:"-"`
+}
+
+func (s *Store) Events(ctx context.Context, after int64, limit int) ([]Event, error) {
+	rows, err := s.QueryContext(ctx, `SELECT seq, name, time, COALESCE(task, 0), COALESCE(attempt, 0), COALESCE(run, 0), caller, data
+		FROM events WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []Event{}
+	for rows.Next() {
+		var e Event
+		var data string
+		if err := rows.Scan(&e.Seq, &e.Name, &e.Time, &e.TaskID, &e.Attempt, &e.Run, &e.Caller, &data); err != nil {
+			return nil, err
+		}
+		e.Data = json.RawMessage(data)
+		if e.TaskID != 0 {
+			e.Task = "t_" + strconv.FormatInt(e.TaskID, 10)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
 func Timestamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }

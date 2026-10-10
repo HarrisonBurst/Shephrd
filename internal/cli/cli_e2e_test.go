@@ -128,7 +128,7 @@ func TestOperatorMayActAsAnyDriverLocally(t *testing.T) {
 
 func TestUnknownCommandsAndFlagsAreUsageRefusals(t *testing.T) {
 	env := initialized(t)
-	env.Refused("usage", "bogus")
+	env.Refused("plugin_unknown", "bogus")
 	env.Refused("usage", "repo", "list", "--bogus")
 	env.Refused("usage", "repo")
 }
@@ -149,17 +149,17 @@ func TestRemoteRequestsAreNeverOperators(t *testing.T) {
 		return ""
 	}
 	req := cli.Request{V: cli.Protocol, Argv: []string{"repo", "add", testkit.GitRepo(t, "tool")}, Key: "k"}
-	_, err := cli.Dispatch(context.Background(), cli.Origin{As: "driver:main"}, req, getenv)
+	_, err := cli.Dispatch(context.Background(), cli.Origin{As: "driver:main"}, req, getenv, io.Discard)
 	if fault.As(err).Kind != "operator_only" {
 		t.Fatalf("remote repo add: %v", err)
 	}
 	req.Argv = []string{"repo", "list", "--as", "driver:main"}
-	_, err = cli.Dispatch(context.Background(), cli.Origin{As: "driver:main"}, req, getenv)
+	_, err = cli.Dispatch(context.Background(), cli.Origin{As: "driver:main"}, req, getenv, io.Discard)
 	if fault.As(err).Kind != "usage" {
 		t.Fatalf("--as in remote argv: %v", err)
 	}
 	req.V = 2
-	_, err = cli.Dispatch(context.Background(), cli.Origin{As: "driver:main"}, req, getenv)
+	_, err = cli.Dispatch(context.Background(), cli.Origin{As: "driver:main"}, req, getenv, io.Discard)
 	if fault.As(err).Kind != "version_mismatch" {
 		t.Fatalf("protocol 2: %v", err)
 	}

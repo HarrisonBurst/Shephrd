@@ -38,3 +38,10 @@ CREATE TABLE idempotency (
     time TEXT NOT NULL,
     PRIMARY KEY (caller, key)
 );
+
+CREATE TABLE call_tokens (
+    hash TEXT PRIMARY KEY,
+    plugin TEXT NOT NULL,
+    acts_as TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
