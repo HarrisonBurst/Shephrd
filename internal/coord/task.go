@@ -43,6 +43,8 @@ type Task struct {
 	Attempt     int64         `json:"attempt"`
 	Revision    int64         `json:"revision"`
 	Milestone   string        `json:"milestone,omitempty"`
+	ArtifactID  int64         `json:"-"`
+	Artifact    string        `json:"artifact,omitempty"`
 	Created     string        `json:"created"`
 	Updated     string        `json:"updated"`
 }
@@ -62,18 +64,21 @@ func (t *Task) Summary() *Task {
 
 const taskColumns = `t.id, COALESCE(t.parent, 0), COALESCE(t.driver, ''), t.root, t.depth, COALESCE(t.request, 0), t.role,
 	COALESCE(t.repo, 0), COALESCE(r.name, ''), t.title, t.objective, t.acceptance, t.deliverable, t.host, t.harness, t.model,
-	t.state, t.reason, t.attempt, t.revision, t.milestone, t.created_at, t.updated_at
+	t.state, t.reason, t.attempt, t.revision, t.milestone, COALESCE(t.artifact, 0), t.created_at, t.updated_at
 	FROM tasks t LEFT JOIN repos r ON r.id = t.repo`
 
 func scanTask(row interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
 	err := row.Scan(&t.ID, &t.Parent, &t.Driver, &t.Root, &t.Depth, &t.Request, &t.Role, &t.RepoID, &t.Repo,
 		&t.Title, &t.Objective, &t.Acceptance, &t.Deliverable, &t.Target.Host, &t.Target.Harness, &t.Target.Model,
-		&t.State, &t.Reason, &t.Attempt, &t.Revision, &t.Milestone, &t.Created, &t.Updated)
+		&t.State, &t.Reason, &t.Attempt, &t.Revision, &t.Milestone, &t.ArtifactID, &t.Created, &t.Updated)
 	if err != nil {
 		return nil, err
 	}
 	t.Ref = TaskRef(t.ID)
+	if t.ArtifactID != 0 {
+		t.Artifact = ArtifactRef(t.ArtifactID)
+	}
 	if t.Parent != 0 {
 		t.ParentRef = TaskRef(t.Parent)
 	}
@@ -510,15 +515,60 @@ func Wake(tx *store.Tx, t *Task) error {
 	return err
 }
 
+// Cancel closes a task that has nothing to lose: it never started, or it
+// is held and none of its attempts holds a workspace.
 func Cancel(tx *store.Tx, c Caller, t *Task) error {
-	if t.State != "queued" {
-		return fault.New("invalid_state", "only a task that never started can be cancelled; %s is %s", t.Ref, t.State).
+	var holding int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM attempts WHERE task = ? AND workspace_state NOT IN ('none', 'released')`, t.ID).Scan(&holding); err != nil {
+		return err
+	}
+	if t.State != "queued" && (t.State != "held" || holding > 0) {
+		return fault.New("invalid_state", "%s is %s with work to lose; discard it instead", t.Ref, t.State).
 			WithNext("task", "discard", t.Ref)
 	}
+	return Close(tx, c.String(), t, "cancelled")
+}
+
+func Close(tx *store.Tx, caller string, t *Task, reason string) error {
 	if err := requireNoOpenChildren(tx, t); err != nil {
 		return err
 	}
-	return SetState(tx, c.String(), t, "closed", "cancelled")
+	return SetState(tx, caller, t, "closed", reason)
+}
+
+// SetMilestone records a published or merged milestone and reports each
+// queued sibling that it makes ready. Readiness is evidence; the owner is
+// woken only when someone else reached the milestone.
+func SetMilestone(tx *store.Tx, t *Task, milestone string, wake bool) error {
+	if t.Milestone == milestone || t.Milestone == "merged" {
+		return nil
+	}
+	t.Milestone = milestone
+	if err := Touch(tx, t, `milestone = ?`, milestone); err != nil {
+		return err
+	}
+	dependents, err := Query(tx, `t.state = 'queued' AND t.id IN (SELECT task FROM dependencies WHERE dependency = ?)`, t.ID)
+	if err != nil {
+		return err
+	}
+	for _, dependent := range dependents {
+		if _, ready, err := Dependencies(tx, dependent.ID); err != nil || !ready {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		seq, err := tx.Emit("task.ready", "system", dependent.ID, 0, 0, map[string]string{"task": dependent.Ref, "dependency": t.Ref, "milestone": milestone})
+		if err != nil {
+			return err
+		}
+		if wake {
+			if err := WakeOwner(tx, dependent, seq); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func requireNoOpenChildren(q Querier, t *Task) error {

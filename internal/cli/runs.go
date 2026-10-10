@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"shephrd/internal/artifact"
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
 	"shephrd/internal/execution"
@@ -28,7 +29,12 @@ func (a *app) executor() (*execution.Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return execution.New(db, cfg, reg, a.getenv)
+	x, err := execution.New(db, cfg, reg, a.getenv)
+	if err != nil {
+		return nil, err
+	}
+	x.Inputs = artifact.Inputs(db, cfg)
+	return x, nil
 }
 
 func runCommands(a *app) []*cobra.Command {
@@ -205,8 +211,12 @@ func reportCommand(a *app) *cobra.Command {
 			if err != nil {
 				return nil, err
 			}
+			var sealed *artifact.Artifact
 			if kind == "result" {
 				if err := a.gate("report.result", t.ID, map[string]any{"task": t.Ref, "body": body, "request": report.Request, "files": files}); err != nil {
+					return nil, err
+				}
+				if sealed, err = a.seal(caller, t, body, files); err != nil {
 					return nil, err
 				}
 			}
@@ -215,8 +225,17 @@ func reportCommand(a *app) *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
+				out := map[string]any{"task": t.Ref, "kind": kind}
+				if sealed != nil {
+					if err := artifact.Record(tx, caller, t, sealed); err != nil {
+						return nil, err
+					}
+					report.Extra = map[string]any{"artifact": sealed.Ref}
+					out["artifact"] = sealed
+				}
 				seq, err := coord.RecordReport(tx, caller, t, report)
-				return map[string]any{"task": t.Ref, "seq": seq, "kind": kind}, err
+				out["seq"] = seq
+				return out, err
 			})
 		})
 		cmd.AddCommand(sub)

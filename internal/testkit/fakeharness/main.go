@@ -16,6 +16,7 @@ import (
 )
 
 type action struct {
+	Work    string            `json:"work"`
 	Report  []string          `json:"report"`
 	Shephrd []string          `json:"shephrd"`
 	Write   map[string]string `json:"write"`
@@ -24,7 +25,10 @@ type action struct {
 	Exit    *int              `json:"exit"`
 }
 
-var briefTask = regexp.MustCompile(`# Shephrd brief: (t_\d+)`)
+var (
+	briefTask        = regexp.MustCompile(`# Shephrd brief: (t_\d+)`)
+	briefDeliverable = regexp.MustCompile(`\*\*Deliverable:\*\* (\w+)`)
+)
 
 func main() {
 	home := os.Getenv("HOME")
@@ -62,12 +66,25 @@ func main() {
 		json.Unmarshal(body, &script)
 	}
 	runs := script[task]
-	actions := []action{{Report: []string{"result", "done"}}}
-	if index < len(runs) {
+	var actions []action
+	switch m := briefDeliverable.FindStringSubmatch(brief); {
+	case index < len(runs):
 		actions = runs[index]
+	case m != nil && m[1] == "code":
+		actions = []action{{Work: "Do the work"}, {Report: []string{"result", "done"}}}
+	case m != nil && m[1] == "report":
+		actions = []action{{Write: map[string]string{"report.md": "# Findings\n"}}, {Report: []string{"result", "done", "--file", "report.md"}}}
+	default:
+		actions = []action{{Report: []string{"result", "done"}}}
 	}
 	for _, a := range actions {
 		switch {
+		case a.Work != "":
+			name := fmt.Sprintf("work-%s-%d-%d.txt", task, index, time.Now().UnixNano())
+			os.WriteFile(filepath.Join(cwd, name), []byte(a.Work+"\n"), 0o644)
+			git := []string{"-c", "user.name=Fake", "-c", "user.email=fake@shephrd.invalid", "-c", "commit.gpgsign=false"}
+			run(dir, task, "git", append(git, "add", name), cwd)
+			run(dir, task, "git", append(git, "commit", "-q", "-m", a.Work), cwd)
 		case a.Report != nil:
 			run(dir, task, "shephrd", append([]string{"report"}, a.Report...), cwd)
 		case a.Shephrd != nil:

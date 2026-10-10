@@ -288,6 +288,12 @@ func BeginRun(tx *store.Tx, caller string, t *Task, purpose string, dir func(gen
 	if err := Touch(tx, t, `run = ?, wake_at = NULL`, id); err != nil {
 		return nil, "", err
 	}
+	if t.State == "done" {
+		t.ArtifactID, t.Artifact = 0, ""
+		if _, err := tx.Exec(`UPDATE tasks SET artifact = NULL WHERE id = ?`, t.ID); err != nil {
+			return nil, "", err
+		}
+	}
 	if t.State != "running" {
 		if err := SetState(tx, caller, t, "running", ""); err != nil {
 			return nil, "", err

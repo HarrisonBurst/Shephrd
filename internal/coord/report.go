@@ -91,7 +91,7 @@ func RecordReport(tx *store.Tx, c Caller, t *Task, r *Report) (int64, error) {
 		}
 		states := []map[string]string{}
 		for _, child := range children {
-			states = append(states, map[string]string{"task": child.Ref, "state": child.State, "reason": child.Reason, "milestone": child.Milestone})
+			states = append(states, map[string]string{"task": child.Ref, "state": child.State, "reason": child.Reason, "milestone": child.Milestone, "artifact": child.Artifact})
 		}
 		data["children"] = states
 	}

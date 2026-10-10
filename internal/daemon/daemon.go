@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"shephrd/internal/artifact"
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
 	"shephrd/internal/execution"
@@ -118,6 +119,7 @@ func (d *Daemon) pass(ctx context.Context) {
 		d.logf("executor: %v", err)
 		return
 	}
+	x.Inputs = artifact.Inputs(d.db, &cfg)
 	if err := d.pluginsChanged(ctx, reg); err != nil {
 		d.logf("plugins: %v", err)
 	}
