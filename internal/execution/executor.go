@@ -230,7 +230,11 @@ func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coor
 		x.abandon(ctx, run, "start_failed")
 		return nil, fault.New("start_failed", "%v", err).WithNext("task", "log", t.Ref)
 	}
-	brief, err := x.brief(ctx, t, a, run)
+	_, info, err := x.HostInfo(ctx, a.Host)
+	if err != nil {
+		return fail(err)
+	}
+	brief, err := x.brief(ctx, info.Shephrd, t, a, run)
 	if err != nil {
 		return fail(err)
 	}
@@ -312,8 +316,8 @@ func (x *Executor) abandon(ctx context.Context, run *coord.Run, reason string) {
 	})
 }
 
-func (x *Executor) brief(ctx context.Context, t *coord.Task, a *coord.Attempt, run *coord.Run) (string, error) {
-	in := briefInput{task: t, attempt: a, run: run}
+func (x *Executor) brief(ctx context.Context, shephrd string, t *coord.Task, a *coord.Attempt, run *coord.Run) (string, error) {
+	in := briefInput{shephrd: shephrd, task: t, attempt: a, run: run}
 	guide, err := x.Guide(map[string]string{"worker": "worker", "driver": "subdriver"}[t.Role])
 	if err != nil {
 		return "", err

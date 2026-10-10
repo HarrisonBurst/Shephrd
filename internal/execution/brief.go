@@ -17,6 +17,7 @@ const (
 )
 
 type briefInput struct {
+	shephrd   string
 	task      *coord.Task
 	attempt   *coord.Attempt
 	run       *coord.Run
@@ -49,6 +50,7 @@ func renderBrief(in briefInput) string {
 		where = "in repository " + t.Repo
 	}
 	fmt.Fprintf(&b, "You are %s on task %s %s. Report with `shephrd report`; your identity comes from your environment.\n\n", role, t.Ref, where)
+	fmt.Fprintf(&b, "Run Shephrd as `%s`. Another `shephrd` on your PATH may be a different install that does not know this task. Any Shephrd skill installed in your harness is for the main driver, not for you: follow this brief.\n\n", in.shephrd)
 	if in.nudge != "" {
 		fmt.Fprintf(&b, "**Your previous run ended without reporting (%s).** Finish the turn now: report a result, question or blocker", in.nudge)
 		if t.Role == "driver" {

@@ -5,6 +5,8 @@ description: Delegate repository work through Shephrd. Use for any request that 
 
 # Shephrd: main driver
 
+This skill is for the main driver only. If a Shephrd brief says you are a sub-driver or a worker, ignore this skill and follow your brief.
+
 You are the main driver. Your job is to understand the user and keep the conversation moving. Shephrd does the work through sub-drivers and workers; you delegate all of it.
 
 Every `shephrd` command prints one JSON object. Errors print `{"error": {...}}` on stderr with a `next` list of exact commands that safely move forward. Follow those rather than inventing recovery steps. Long text goes on stdin with `-`.

@@ -70,7 +70,7 @@ func Launch(runDir string, spec RunSpec, token string) (proc.Identity, error) {
 }
 
 func (s RunSpec) environment(token string) []string {
-	return append([]string{"PATH=" + s.Path, "HOME=" + s.Home, "SHEPHRD_CONFIG=" + s.Config, "SHEPHRD_RUN_TOKEN=" + token}, s.Account...)
+	return append([]string{"PATH=" + filepath.Dir(s.Shephrd) + ":" + s.Path, "HOME=" + s.Home, "SHEPHRD_CONFIG=" + s.Config, "SHEPHRD_RUN_TOKEN=" + token}, s.Account...)
 }
 
 // Supervise is the body of `shephrd _run`: it records its own identity,
