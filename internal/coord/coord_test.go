@@ -191,6 +191,34 @@ func TestClosingNeverOrphansChildren(t *testing.T) {
 	}
 }
 
+func TestUnknownLivenessRefusesEveryReplacement(t *testing.T) {
+	f := newFixture(t)
+	task := f.must(f.create(main, NewTask{Repo: "api", Objective: "Work"}))
+	f.write(func(tx *store.Tx) error {
+		a, err := AllocateAttempt(tx, task, task.Target, func(int64) (string, string) { return "/w", "b" }, 0)
+		if err != nil {
+			return err
+		}
+		if err := AdoptAttempt(tx, "test", task, a); err != nil {
+			return err
+		}
+		r, _, err := BeginRun(tx, "test", task, "start", func(int64) string { return "/r" })
+		if err != nil {
+			return err
+		}
+		if err := SetLiveness(tx, r, "unknown"); err != nil {
+			return err
+		}
+		return Hold(tx, task, "lost")
+	})
+	task, _ = Load(f.db, task.ID)
+	for _, purpose := range []string{"resume", "retry"} {
+		if err := CheckRunnable(f.db, task, purpose); kind(err) != "liveness_unknown" {
+			t.Fatalf("%s with unknown liveness: %v", purpose, err)
+		}
+	}
+}
+
 func TestStateTransitionsFollowTheLifecycle(t *testing.T) {
 	f := newFixture(t)
 	task := f.must(f.create(main, NewTask{Repo: "api", Objective: "Work"}))

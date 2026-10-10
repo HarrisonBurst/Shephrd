@@ -149,7 +149,7 @@ The task's target names the harness and an opaque model string. Execution passes
 | `workspace reconcile` | Classify interrupted effects on every host |
 | `host list` | Configured hosts with reachability, version and installed providers |
 
-`shephrd agent` and `shephrd _run` are private commands between Shephrd binaries of the same release, not part of the public command surface.
+`shephrd agent`, `shephrd _run` and the supervisor's `_started` and `_exited` are private commands between Shephrd binaries of the same release, not part of the public command surface. The supervisor records its own process identity with `_started`, using its run token, before it starts the harness, so the identity is recorded even if the process that launched it dies.
 
 ## Failure behavior
 
@@ -189,7 +189,7 @@ None of its own. Coordination's `task.start` gate runs before every run starts, 
 
 | Type | Request | Response | Built-in |
 |---|---|---|---|
-| `harness` | Mode (new or resume), read-only flag, brief path, workspace, model, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
+| `harness` | Mode (new or resume), read-only flag, brief path and text, workspace, model, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
 | `presentation` | Operation: open, probe, close, focus. For open: title, command, workspace | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
 
 A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor inside a terminal it creates, and only an exact `absent` answer counts as the endpoint being gone.

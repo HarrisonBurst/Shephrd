@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -26,6 +27,30 @@ type Config struct {
 	Packages  map[string]Package      `toml:"packages"`
 	Plugins   map[string]PluginConfig `toml:"plugins"`
 	Providers map[string]string       `toml:"providers"`
+	Skills    map[string]Skill        `toml:"skills"`
+	Timeouts  Timeouts                `toml:"timeouts"`
+}
+
+type Skill struct {
+	Replace string `toml:"replace"`
+	Extend  string `toml:"extend"`
+}
+
+type Timeouts struct {
+	Inactivity       Duration `toml:"inactivity"`
+	DriverInactivity Duration `toml:"driver_inactivity"`
+	TurnBudget       Duration `toml:"turn_budget"`
+	Settle           Duration `toml:"settle"`
+}
+
+type Duration struct {
+	time.Duration
+}
+
+func (d *Duration) UnmarshalText(text []byte) error {
+	var err error
+	d.Duration, err = time.ParseDuration(string(text))
+	return err
 }
 
 type Target struct {
@@ -109,6 +134,35 @@ func (c *Config) resolve(getenv Getenv) error {
 	}
 	if c.MaxDepth == 0 {
 		c.MaxDepth = 3
+	}
+	for _, d := range []struct {
+		value    *Duration
+		fallback time.Duration
+	}{
+		{&c.Timeouts.Inactivity, 30 * time.Minute},
+		{&c.Timeouts.DriverInactivity, 30 * time.Minute},
+		{&c.Timeouts.TurnBudget, 10 * time.Minute},
+		{&c.Timeouts.Settle, 5 * time.Second},
+	} {
+		if d.value.Duration == 0 {
+			d.value.Duration = d.fallback
+		}
+	}
+	for role, skill := range c.Skills {
+		if role != "main" && role != "subdriver" && role != "worker" {
+			return fault.New("invalid_config", "%s: skills.%s: the roles are main, subdriver and worker", c.Path, role)
+		}
+		for _, path := range []*string{&skill.Replace, &skill.Extend} {
+			if *path == "" {
+				continue
+			}
+			expanded, err := expand(getenv, *path)
+			if err != nil {
+				return err
+			}
+			*path = expanded
+		}
+		c.Skills[role] = skill
 	}
 	if c.MaxDepth < 1 {
 		return fault.New("invalid_config", "%s: max_depth must be at least 1", c.Path)

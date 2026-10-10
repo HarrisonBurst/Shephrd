@@ -30,6 +30,7 @@ CREATE TABLE tasks (
     attempt INTEGER NOT NULL,
     revision INTEGER NOT NULL,
     milestone TEXT NOT NULL CHECK (milestone IN ('', 'published', 'merged')),
+    run INTEGER,
     wake_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -52,6 +53,47 @@ CREATE TABLE requests (
     state TEXT NOT NULL CHECK (state IN ('open', 'asked', 'answered')),
     result INTEGER,
     PRIMARY KEY (task, seq)
+);
+
+CREATE TABLE attempts (
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    n INTEGER NOT NULL,
+    host TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    model TEXT NOT NULL,
+    base TEXT NOT NULL,
+    stacked_on INTEGER REFERENCES tasks(id),
+    branch TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    workspace_state TEXT NOT NULL CHECK (workspace_state IN ('none', 'allocating', 'held', 'releasing', 'released', 'unknown')),
+    session TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task, n)
+);
+
+CREATE TABLE runs (
+    id INTEGER PRIMARY KEY,
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    attempt INTEGER NOT NULL,
+    generation INTEGER NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    host TEXT NOT NULL,
+    purpose TEXT NOT NULL CHECK (purpose IN ('start', 'resume', 'retry', 'continue', 'nudge')),
+    dir TEXT NOT NULL,
+    pid INTEGER,
+    start_time TEXT,
+    endpoint TEXT NOT NULL DEFAULT '',
+    liveness TEXT NOT NULL CHECK (liveness IN ('starting', 'live', 'exited', 'unknown')),
+    turn_reported INTEGER NOT NULL DEFAULT 0,
+    exit_status INTEGER,
+    stop_reason TEXT NOT NULL DEFAULT '',
+    warned_long INTEGER NOT NULL DEFAULT 0,
+    from_seq INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    last_activity TEXT NOT NULL,
+    exited_at TEXT,
+    UNIQUE (task, generation),
+    FOREIGN KEY (task, attempt) REFERENCES attempts (task, n)
 );
 
 CREATE TABLE plugin_data (

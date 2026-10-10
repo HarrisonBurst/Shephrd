@@ -2,14 +2,20 @@ package testkit
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -91,6 +97,7 @@ type Env struct {
 	Bin  string
 	Home string
 	Vars map[string]string
+	Path []string
 }
 
 func NewEnv(t testing.TB) *Env {
@@ -99,7 +106,126 @@ func NewEnv(t testing.TB) *Env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Env{t: t, Bin: Binary(t), Home: home, Vars: map[string]string{}}
+	e := &Env{t: t, Bin: Binary(t), Home: home, Vars: map[string]string{}}
+	e.Path = []string{filepath.Dir(e.Bin)}
+	t.Cleanup(e.killRuns)
+	return e
+}
+
+// killRuns stops any session a test left running, so none outlives it,
+// and makes read-only workspaces removable again.
+func (e *Env) killRuns() {
+	defer filepath.WalkDir(e.Home, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			os.Chmod(path, 0o755)
+		}
+		return nil
+	})
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(e.Home, ".local", "state", "shephrd", "shephrd.db")+"?mode=ro")
+	if err != nil {
+		return
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT pid FROM runs WHERE pid IS NOT NULL AND liveness != 'exited'`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pid int
+		if rows.Scan(&pid) == nil && pid > 1 {
+			syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	}
+}
+
+// InstallHarnesses puts the fake harness on PATH as claude, codex and pi.
+func (e *Env) InstallHarnesses() {
+	e.t.Helper()
+	body, err := os.ReadFile(Tool(e.t, "./internal/testkit/fakeharness", "fakeharness"))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	dir := filepath.Join(e.Home, "fakebin")
+	os.MkdirAll(dir, 0o755)
+	for _, name := range []string{"claude", "codex", "pi"} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o755); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	e.Path = append([]string{dir}, e.Path...)
+}
+
+// Script sets what the fake harness does on each run of each task.
+func (e *Env) Script(script map[string][][]map[string]any) {
+	e.t.Helper()
+	body, err := json.Marshal(script)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	dir := filepath.Join(e.Home, ".fakeharness")
+	os.MkdirAll(dir, 0o700)
+	if err := os.WriteFile(filepath.Join(dir, "script.json"), body, 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// Calls returns what the fake harness recorded, in order.
+func (e *Env) Calls() []map[string]any {
+	body, _ := os.ReadFile(filepath.Join(e.Home, ".fakeharness", "calls.jsonl"))
+	var calls []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var call map[string]any
+		if json.Unmarshal([]byte(line), &call) == nil {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+// Eventually polls until cond holds, failing the test after a timeout.
+func (e *Env) Eventually(what string, cond func() bool) {
+	e.t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	var summary []string
+	for _, call := range e.Calls() {
+		delete(call, "env")
+		delete(call, "brief")
+		line, _ := json.Marshal(call)
+		summary = append(summary, string(line))
+	}
+	e.t.Fatalf("timed out waiting for %s\nharness calls:\n%s", what, strings.Join(summary, "\n"))
+}
+
+// Task returns a task as task show reports it.
+func (e *Env) Task(ref string, as ...string) map[string]any {
+	e.t.Helper()
+	return e.OK(append([]string{"task", "show", ref}, as...)...)["task"].(map[string]any)
+}
+
+// WaitState waits until a task reaches a state, and its run has exited.
+func (e *Env) WaitState(ref, state string) map[string]any {
+	e.t.Helper()
+	var task map[string]any
+	e.Eventually(ref+" "+state, func() bool {
+		task = e.Task(ref)
+		if task["state"] != state {
+			return false
+		}
+		log := e.Run("", "task", "log", ref)
+		if log.Code != 0 {
+			return true
+		}
+		run := log.JSON(e.t)["run"].(map[string]any)
+		return run["liveness"] == "exited"
+	})
+	return task
 }
 
 func (e *Env) ConfigPath() string {
@@ -115,7 +241,7 @@ type Result struct {
 func (e *Env) Run(stdin string, args ...string) Result {
 	e.t.Helper()
 	cmd := exec.Command(e.Bin, args...)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + e.Home}
+	cmd.Env = []string{"PATH=" + strings.Join(append(e.Path, os.Getenv("PATH")), ":"), "HOME=" + e.Home}
 	for key, value := range e.Vars {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}

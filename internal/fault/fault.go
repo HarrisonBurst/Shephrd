@@ -25,7 +25,11 @@ func (e *Error) WithNext(argv ...string) *Error {
 	return e
 }
 
+// As returns err as a refusal; a nil error is the zero refusal, with no kind.
 func As(err error) *Error {
+	if err == nil {
+		return &Error{}
+	}
 	var e *Error
 	if errors.As(err, &e) {
 		return e

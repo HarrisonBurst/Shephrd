@@ -15,6 +15,7 @@ import (
 func taskCommand(a *app) *cobra.Command {
 	cmd := &cobra.Command{Use: "task", Short: "Create, read and act on delegated tasks"}
 	cmd.AddCommand(taskCreate(a), taskShow(a), taskList(a), taskSend(a), taskCancel(a), taskAdopt(a), taskNote(a), taskData(a))
+	cmd.AddCommand(runCommands(a)...)
 	return cmd
 }
 
