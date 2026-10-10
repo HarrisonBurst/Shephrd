@@ -78,7 +78,7 @@ A run is one turn of one session. It starts, works until it reports a result, qu
 
 With a terminal presentation, such as Herdr or cmux, people watch the harness work. The harness runs its own interactive interface in the terminal instead of its headless mode. Its first message points it at the brief. The supervisor checks the run for an ended turn every two seconds. Once the run has reported its result, question or blocker, or is no longer the task's current run, the supervisor waits a short grace for the harness to finish writing, then ends it. People can still type into the harness while the turn runs.
 
-A task keeps one terminal across its turns. A new run asks the presentation to reuse the endpoint of the task's previous run, and a provider that still has that terminal runs the next turn there. The terminal is labelled with the task, its role and its title. When a task closes, its terminals close once its runs have exited.
+A terminal is labelled with the task, its role and its title. After a reported turn has fully exited and its process is proven gone, execution closes that run's terminal. A continuation opens a fresh terminal while resuming the task's native harness session in the same attempt and workspace; terminal reuse is not session resume. Execution retries closing an eligible idle terminal during reconciliation. It never closes an unreported, live or unknown run's terminal, or an endpoint whose identity or ownership is uncertain. A task's remaining terminals close when it closes, subject to the same safety checks.
 
 ### Continuation
 
@@ -196,9 +196,9 @@ None of its own. Coordination's `task.start` gate runs before every run starts, 
 | Type | Request | Response | Built-in |
 |---|---|---|---|
 | `harness` | Mode (new or resume), read-only flag, interactive flag, brief path and first message, workspace, model, title, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
-| `presentation` | Operation: open, probe, close, focus. For open: title, command, workspace, and the endpoint of the task's previous run to reuse | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
+| `presentation` | Operation: open, probe, close, focus. For open: title, command and workspace | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
 
-A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor inside a terminal it creates, and only an exact `absent` answer counts as the endpoint being gone. A host names its presentation with `presentation` in its own configuration. With a terminal presentation, the run token reaches the supervisor through a private file in the run directory that the supervisor removes, never through a command line or a terminal's environment, and the supervisor records its own process identity once it starts.
+A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor inside a terminal it creates. Execution closes only a recorded endpoint whose run's process is proven gone and whose exact endpoint is still present; an uncertain probe or ambiguous ownership leaves the terminal open. Only an exact `absent` answer counts as the endpoint being gone. A host names its presentation with `presentation` in its own configuration. With a terminal presentation, the run token reaches the supervisor through a private file in the run directory that the supervisor removes, never through a command line or a terminal's environment, and the supervisor records its own process identity once it starts.
 
 ### Limits
 
