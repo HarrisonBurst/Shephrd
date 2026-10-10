@@ -88,4 +88,4 @@ Each system has its own spec:
 
 Later specs decide, for each system, its data model, command and protocol shape, transport and trust details and recovery behavior. Every system spec also has an **Extensibility** section defining its events, intercept points, providers and limits on plugins, as described in [what each system spec defines](systems/extensibility.md#what-each-system-spec-defines). This proposal only fixes the responsibilities, principles and boundaries those specs must respect.
 
-The new core is built fresh, with no legacy compatibility or migration from the current implementation. The current behavior and its end-to-end tests inform the specs as a record of failure modes to handle, but do not constrain them.
+The new core is built fresh, with no legacy compatibility or migration from the current implementation. The current behavior and its end-to-end tests inform the specs as a record of failure modes to handle, but do not constrain them. The [implementation plan](implementation.md) orders the build.
