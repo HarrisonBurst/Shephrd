@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"shephrd/internal/fault"
+	"shephrd/internal/gitcmd"
 	"shephrd/internal/store"
 )
 
@@ -32,7 +32,7 @@ func InspectRepo(path, defaultBranch string) (string, string, error) {
 	if err != nil {
 		return "", "", fault.New("not_a_repository", "%s does not exist", path)
 	}
-	top, err := git(canonical, "rev-parse", "--show-toplevel")
+	top, err := gitcmd.Run(canonical, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", "", fault.New("not_a_repository", "%s is not a git work tree", canonical)
 	}
@@ -40,20 +40,20 @@ func InspectRepo(path, defaultBranch string) (string, string, error) {
 		return "", "", fault.New("not_a_repository", "%s is not the root of its git work tree", canonical)
 	}
 	if defaultBranch == "" {
-		if remoteHead, err := git(canonical, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if remoteHead, err := gitcmd.Run(canonical, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 			defaultBranch = strings.TrimPrefix(remoteHead, "origin/")
-		} else if head, err := git(canonical, "symbolic-ref", "--short", "HEAD"); err == nil {
+		} else if head, err := gitcmd.Run(canonical, "symbolic-ref", "--short", "HEAD"); err == nil {
 			defaultBranch = head
 		} else {
 			return "", "", fault.New("default_branch_unknown", "cannot determine the default branch of %s", canonical).
 				WithNext("repo", "add", canonical, "--default-branch", "<branch>")
 		}
 	}
-	if _, err := git(canonical, "check-ref-format", "--branch", defaultBranch); err != nil {
+	if _, err := gitcmd.Run(canonical, "check-ref-format", "--branch", defaultBranch); err != nil {
 		return "", "", fault.New("invalid_branch", "%q is not a valid branch name", defaultBranch)
 	}
-	_, local := git(canonical, "rev-parse", "--verify", "--quiet", "refs/heads/"+defaultBranch)
-	_, remote := git(canonical, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+defaultBranch)
+	_, local := gitcmd.Run(canonical, "rev-parse", "--verify", "--quiet", "refs/heads/"+defaultBranch)
+	_, remote := gitcmd.Run(canonical, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+defaultBranch)
 	if local != nil && remote != nil {
 		return "", "", fault.New("invalid_branch", "branch %q does not exist in %s", defaultBranch, canonical)
 	}
@@ -104,9 +104,4 @@ func ListRepos(ctx context.Context, s *store.Store) ([]Repo, error) {
 		repos = append(repos, repo)
 	}
 	return repos, rows.Err()
-}
-
-func git(dir string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
-	return strings.TrimSpace(string(out)), err
 }

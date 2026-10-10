@@ -97,15 +97,16 @@ name = "linear"
 version = "0.3.0"
 protocol = 1
 exec = ["bin/shephrd-linear"]
+skills = ["skills/linear.md"]
 
 [events]
 subscribe = ["task.created", "task.state", "task.result"]
 
 [commands]
 linear = "Sync tasks with Linear issues"
-
-skills = ["skills/linear.md"]
 ```
+
+A plugin's only command is its own name, `shephrd linear ...`; the rest of the arguments are its own to interpret.
 
 A gate or provider is declared the same way:
 
@@ -180,7 +181,15 @@ Every call starts the plugin executable, writes one JSON request to stdin and re
 ```
 
 - Every call has a timeout and a response size limit. Intercept hooks default to 5 seconds, and each provider type sets its own.
-- The plugin receives a clean environment: `PATH`, `HOME`, `SHEPHRD_PLUGIN` and, when it may call back, `SHEPHRD_CALL_TOKEN`. Shephrd identity variables from the parent, such as a run token, are never passed through.
+- The plugin receives a clean environment: `PATH`, `HOME`, `SHEPHRD_PLUGIN`, `SHEPHRD_CONFIG` and, when it may call back, `SHEPHRD_CALL_TOKEN`. Shephrd identity variables from the parent, such as a run token, are never passed through. It runs in its plugin directory, and its stderr is appended to its log, which `plugin status` names.
+- The response depends on the call's kind:
+
+  | Kind | Response |
+  |---|---|
+  | `event` | Any object acknowledges the batch. |
+  | `intercept` | `{"decision": "allow"}` or `{"decision": "block", "reason": "..."}` |
+  | `provide` | The provider type's response schema. |
+  | `command` | The command's result object, or `{"error": {"kind": "...", "message": "..."}}` |
 - A manifest whose protocol version Shephrd does not support is not loaded and is reported.
 
 Starting a process per call keeps plugins stateless, isolated and simple to write. Plugins that need state keep their own.

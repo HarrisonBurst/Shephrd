@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 
 	"shephrd/internal/config"
 	"shephrd/internal/fault"
+	"shephrd/internal/plugin"
 	"shephrd/internal/store"
 )
 
@@ -36,6 +38,7 @@ type Warning struct {
 type Response struct {
 	Result   json.RawMessage
 	Warnings []Warning
+	Streamed bool
 }
 
 func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv config.Getenv) int {
@@ -57,14 +60,21 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		key = uuid.NewString()
 	}
 	req := Request{V: Protocol, Argv: argv, Key: key, RunToken: getenv("SHEPHRD_RUN_TOKEN"), CallToken: getenv("SHEPHRD_CALL_TOKEN"), Stdin: stdin}
-	resp, err := Dispatch(ctx, Origin{Local: true, As: as}, req, getenv)
+	return Run(ctx, Origin{Local: true, As: as}, req, getenv, stdout, stderr)
+}
+
+func Run(ctx context.Context, origin Origin, req Request, getenv config.Getenv, stdout, stderr io.Writer) int {
+	resp, err := Dispatch(ctx, origin, req, getenv, stdout)
 	if err != nil {
 		return writeError(stderr, err)
+	}
+	if resp.Streamed {
+		return 0
 	}
 	return writeResponse(stdout, resp)
 }
 
-func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Getenv) (Response, error) {
+func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Getenv, stream io.Writer) (Response, error) {
 	if req.V != Protocol {
 		return Response{}, fault.New("version_mismatch", "request protocol %d, this release speaks %d", req.V, Protocol)
 	}
@@ -82,9 +92,16 @@ func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Get
 			return Response{}, fault.New("usage", "%s belongs to the request envelope, not argv", strings.SplitN(arg, "=", 2)[0])
 		}
 	}
-	a := &app{ctx: ctx, origin: origin, req: req, getenv: getenv}
+	a := &app{ctx: ctx, origin: origin, req: req, getenv: getenv, stream: stream}
 	defer a.close()
 	root := newRoot(a)
+	if len(req.Argv) > 0 && !strings.HasPrefix(req.Argv[0], "-") && !slices.Contains(a.reserved, req.Argv[0]) {
+		result, err := a.pluginCommand(req.Argv[0], req.Argv[1:])
+		if err != nil {
+			return Response{}, fault.As(err)
+		}
+		return Response{Result: result, Warnings: a.warnings}, nil
+	}
 	root.SetArgs(req.Argv)
 	root.SetOut(io.Discard)
 	root.SetErr(io.Discard)
@@ -94,6 +111,9 @@ func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Get
 			return Response{}, fe
 		}
 		return Response{}, usage(err)
+	}
+	if a.streamed {
+		return Response{Streamed: true}, nil
 	}
 	if a.result == nil {
 		return Response{}, fault.New("usage", "%q needs a subcommand", strings.Join(req.Argv, " "))
@@ -109,8 +129,12 @@ type app struct {
 	cfg      *config.Config
 	caller   *Caller
 	db       *store.Store
+	plugins  *plugin.Registry
+	reserved []string
 	stdin    []byte
 	stdinUse bool
+	stream   io.Writer
+	streamed bool
 	result   json.RawMessage
 	warnings []Warning
 }
@@ -143,6 +167,46 @@ func (a *app) store() (*store.Store, error) {
 		}
 	}
 	return a.db, nil
+}
+
+func (a *app) registry() (*plugin.Registry, error) {
+	if a.plugins == nil {
+		cfg, err := a.config()
+		if err != nil {
+			return nil, err
+		}
+		a.plugins = plugin.Load(cfg, a.reserved)
+	}
+	return a.plugins, nil
+}
+
+func (a *app) gate(point string, task int64, action any) error {
+	reg, err := a.registry()
+	if err != nil {
+		return err
+	}
+	err = reg.Gate(a.ctx, point, action, a.getenv)
+	blocked, ok := plugin.AsBlocked(err)
+	if !ok {
+		return err
+	}
+	caller, err := a.identity()
+	if err != nil {
+		return err
+	}
+	db, err := a.store()
+	if err != nil {
+		return err
+	}
+	if err := db.Write(a.ctx, func(tx *store.Tx) error {
+		_, err := tx.Emit("plugin.blocked", caller.String(), task, 0, 0, map[string]string{
+			"plugin": blocked.Plugin, "point": blocked.Point, "reason": blocked.Reason,
+		})
+		return err
+	}); err != nil {
+		return err
+	}
+	return blocked.Fault()
 }
 
 func (a *app) run(fn func(cmd *cobra.Command, args []string) (any, error)) func(*cobra.Command, []string) error {

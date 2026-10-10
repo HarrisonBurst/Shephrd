@@ -15,13 +15,30 @@ import (
 )
 
 type Config struct {
-	Path     string `toml:"-"`
-	Host     string `toml:"host"`
-	Driver   string `toml:"driver"`
-	MaxDepth int    `toml:"max_depth"`
-	Store    string `toml:"store"`
-	DataDir  string `toml:"data_dir"`
+	Path      string                  `toml:"-"`
+	Host      string                  `toml:"host"`
+	Driver    string                  `toml:"driver"`
+	MaxDepth  int                     `toml:"max_depth"`
+	Store     string                  `toml:"store"`
+	DataDir   string                  `toml:"data_dir"`
+	Packages  map[string]Package      `toml:"packages"`
+	Plugins   map[string]PluginConfig `toml:"plugins"`
+	Providers map[string]string       `toml:"providers"`
 }
+
+type Package struct {
+	Git  string `toml:"git"`
+	Rev  string `toml:"rev"`
+	Path string `toml:"path"`
+}
+
+type PluginConfig struct {
+	Package string         `toml:"package"`
+	Order   int            `toml:"order"`
+	Options map[string]any `toml:"options"`
+}
+
+var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type Getenv func(string) string
 
@@ -77,6 +94,34 @@ func (c *Config) resolve(getenv Getenv) error {
 	}
 	if c.MaxDepth < 1 {
 		return fault.New("invalid_config", "%s: max_depth must be at least 1", c.Path)
+	}
+	for name, pkg := range c.Packages {
+		if !NamePattern.MatchString(name) {
+			return fault.New("invalid_config", "%s: package name %q must match %s", c.Path, name, NamePattern)
+		}
+		switch {
+		case pkg.Git != "" && pkg.Path != "":
+			return fault.New("invalid_config", "%s: package %s sets both git and path", c.Path, name)
+		case pkg.Git != "" && !commitPattern.MatchString(pkg.Rev):
+			return fault.New("invalid_config", "%s: package %s must pin rev to a full commit", c.Path, name)
+		case pkg.Path != "":
+			path, err := expand(getenv, pkg.Path)
+			if err != nil {
+				return err
+			}
+			pkg.Path = path
+			c.Packages[name] = pkg
+		case pkg.Git == "":
+			return fault.New("invalid_config", "%s: package %s needs git or path", c.Path, name)
+		}
+	}
+	for name, plugin := range c.Plugins {
+		if !NamePattern.MatchString(name) {
+			return fault.New("invalid_config", "%s: plugin name %q must match %s", c.Path, name, NamePattern)
+		}
+		if _, ok := c.Packages[plugin.Package]; !ok {
+			return fault.New("invalid_config", "%s: plugin %s names undeclared package %q", c.Path, name, plugin.Package)
+		}
 	}
 	var err error
 	if c.Store == "" {

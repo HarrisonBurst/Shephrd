@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	buildOnce sync.Once
-	buildDir  string
-	buildErr  error
+	buildMu  sync.Mutex
+	buildDir string
+	built    = map[string]string{}
 )
 
 func Main(m *testing.M) {
@@ -28,30 +28,34 @@ func Main(m *testing.M) {
 
 func Binary(t testing.TB) string {
 	t.Helper()
-	buildOnce.Do(func() {
-		_, file, _, _ := runtime.Caller(0)
-		root := filepath.Join(filepath.Dir(file), "..", "..")
-		if buildDir, buildErr = os.MkdirTemp("", "shephrd-testkit-"); buildErr != nil {
-			return
-		}
-		cmd := exec.Command("go", "build", "-o", filepath.Join(buildDir, "shephrd"), "./cmd/shephrd")
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			buildErr = &buildError{err: err, out: string(out)}
-		}
-	})
-	if buildErr != nil {
-		t.Fatal(buildErr)
+	return Tool(t, "./cmd/shephrd", "shephrd")
+}
+
+// Tool builds a main package from this module once per test process.
+func Tool(t testing.TB, pkg, name string) string {
+	t.Helper()
+	buildMu.Lock()
+	defer buildMu.Unlock()
+	if path, ok := built[pkg]; ok {
+		return path
 	}
-	return filepath.Join(buildDir, "shephrd")
+	if buildDir == "" {
+		dir, err := os.MkdirTemp("", "shephrd-testkit-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		buildDir = dir
+	}
+	_, file, _, _ := runtime.Caller(0)
+	path := filepath.Join(buildDir, name)
+	cmd := exec.Command("go", "build", "-o", path, pkg)
+	cmd.Dir = filepath.Join(filepath.Dir(file), "..", "..")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", pkg, err, out)
+	}
+	built[pkg] = path
+	return path
 }
-
-type buildError struct {
-	err error
-	out string
-}
-
-func (e *buildError) Error() string { return "build shephrd: " + e.err.Error() + "\n" + e.out }
 
 func GitRepo(t testing.TB, name string) string {
 	t.Helper()
@@ -170,4 +174,36 @@ func (r Result) Refusal(t testing.TB, kind string) map[string]any {
 		t.Fatalf("error kind %v, want %s: %s", out.Error["kind"], kind, r.Stderr)
 	}
 	return out.Error
+}
+
+// WritePlugin writes a plugin directory whose executable is bin/fake, the
+// scriptable fake plugin, followed by the given manifest lines.
+func WritePlugin(t testing.TB, dir, name, manifest string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(Tool(t, "./internal/testkit/fakeplugin", "fakeplugin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "fake"), body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	head := "name = \"" + name + "\"\nversion = \"1.0.0\"\nprotocol = 1\nexec = [\"bin/fake\"]\n"
+	if err := os.WriteFile(filepath.Join(dir, "plugin.toml"), []byte(head+manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *Env) AppendConfig(text string) {
+	e.t.Helper()
+	file, err := os.OpenFile(e.ConfigPath(), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.WriteString("\n" + text + "\n"); err != nil {
+		e.t.Fatal(err)
+	}
 }
