@@ -13,6 +13,8 @@ import (
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
 	"shephrd/internal/fault"
+	"shephrd/internal/guide"
+	"shephrd/internal/plugin"
 	"shephrd/internal/proc"
 	"shephrd/internal/store"
 )
@@ -28,6 +30,20 @@ type Executor struct {
 	Inputs func(t *coord.Task, a *coord.Attempt) ([]string, error)
 	// Base chooses a new attempt's base when it stacks on a dependency.
 	Base func(t *coord.Task) (base string, stackedOn int64, err error)
+}
+
+func New(db *store.Store, cfg *config.Config, reg *plugin.Registry, getenv config.Getenv) (*Executor, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return &Executor{
+		DB: db, Cfg: cfg, Self: self, Getenv: getenv, Harness: Harnesses(reg, getenv),
+		Guide: func(role string) (string, error) {
+			text, _, err := guide.Document(cfg, role)
+			return text, err
+		},
+	}, nil
 }
 
 type Started struct {

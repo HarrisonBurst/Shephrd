@@ -125,8 +125,13 @@ func SetState(tx *store.Tx, caller string, t *Task, to, reason string) error {
 	if err := Touch(tx, t, `state = ?, reason = ?`, to, reason); err != nil {
 		return err
 	}
-	_, err := tx.Emit("task.state", caller, t.ID, t.Attempt, 0, map[string]string{"from": from, "to": to, "reason": reason})
-	return err
+	if _, err := tx.Emit("task.state", caller, t.ID, t.Attempt, 0, map[string]string{"from": from, "to": to, "reason": reason}); err != nil {
+		return err
+	}
+	if to == "closed" {
+		return AckTask(tx, t)
+	}
+	return nil
 }
 
 // Touch applies an update to a task and advances its revision.
@@ -455,7 +460,7 @@ func Send(tx *store.Tx, c Caller, t *Task, body string, replyTo int64) (int64, e
 	name := "task.message"
 	var request int64
 	if replyTo != 0 {
-		var question json.RawMessage
+		var question string
 		err := tx.QueryRow(`SELECT data FROM events WHERE seq = ? AND task = ? AND name = 'task.question'`, replyTo, t.ID).Scan(&question)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, fault.New("invalid_reply", "%d is not a question on %s", replyTo, t.Ref).WithNext("task", "show", t.Ref)
@@ -473,7 +478,7 @@ func Send(tx *store.Tx, c Caller, t *Task, body string, replyTo int64) (int64, e
 		var q struct {
 			Request int64 `json:"request"`
 		}
-		json.Unmarshal(question, &q)
+		json.Unmarshal([]byte(question), &q)
 		request = q.Request
 		name, data["reply_to"] = "task.reply", replyTo
 		if request != 0 {

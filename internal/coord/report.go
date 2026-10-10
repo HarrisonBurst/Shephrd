@@ -116,22 +116,22 @@ func RecordReport(tx *store.Tx, c Caller, t *Task, r *Report) (int64, error) {
 		if err := SetState(tx, c.String(), t, "waiting", ""); err != nil {
 			return 0, err
 		}
-		return seq, WakeOwner(tx, t)
+		return seq, WakeOwner(tx, t, seq)
 	case t.Role == "worker" && r.Kind == "result":
 		if err := SetState(tx, c.String(), t, "done", ""); err != nil {
 			return 0, err
 		}
-		return seq, WakeOwner(tx, t)
+		return seq, WakeOwner(tx, t, seq)
 	case t.Role == "driver" && r.Kind == "question":
 		if _, err := tx.Exec(`UPDATE requests SET state = 'asked' WHERE task = ? AND seq = ?`, t.ID, r.Request); err != nil {
 			return 0, err
 		}
-		return seq, WakeOwner(tx, t)
+		return seq, WakeOwner(tx, t, seq)
 	case t.Role == "driver" && r.Kind == "result":
 		if _, err := tx.Exec(`UPDATE requests SET state = 'answered', result = ? WHERE task = ? AND seq = ?`, seq, t.ID, r.Request); err != nil {
 			return 0, err
 		}
-		return seq, WakeOwner(tx, t)
+		return seq, WakeOwner(tx, t, seq)
 	}
 	return seq, nil
 }

@@ -139,6 +139,49 @@ func (e *Env) killRuns() {
 	}
 }
 
+// StartDaemon runs shephrd daemon until the returned stop or the test ends.
+func (e *Env) StartDaemon() func() {
+	e.t.Helper()
+	cmd := exec.Command(e.Bin, "daemon")
+	cmd.Env = e.environ()
+	log, err := os.OpenFile(filepath.Join(e.Home, "daemon.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	cmd.Stdout, cmd.Stderr = log, log
+	if err := cmd.Start(); err != nil {
+		e.t.Fatal(err)
+	}
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cmd.Process.Signal(syscall.SIGTERM)
+			cmd.Wait()
+			log.Close()
+		})
+	}
+	e.t.Cleanup(stop)
+	e.Eventually("the daemon to hold its lock", func() bool {
+		r := e.Run("", "repo", "list")
+		return r.Code == 0 && !strings.Contains(r.Stdout, "daemon_not_running")
+	})
+	return stop
+}
+
+// DaemonLog returns what the daemon logged.
+func (e *Env) DaemonLog() string {
+	body, _ := os.ReadFile(filepath.Join(e.Home, "daemon.log"))
+	return string(body)
+}
+
+func (e *Env) environ() []string {
+	env := []string{"PATH=" + strings.Join(append(e.Path, os.Getenv("PATH")), ":"), "HOME=" + e.Home}
+	for key, value := range e.Vars {
+		env = append(env, key+"="+value)
+	}
+	return env
+}
+
 // InstallHarnesses puts the fake harness on PATH as claude, codex and pi.
 func (e *Env) InstallHarnesses() {
 	e.t.Helper()
@@ -214,7 +257,11 @@ func (e *Env) WaitState(ref, state string) map[string]any {
 	e.t.Helper()
 	var task map[string]any
 	e.Eventually(ref+" "+state, func() bool {
-		task = e.Task(ref)
+		shown := e.Run("", "task", "show", ref)
+		if shown.Code != 0 {
+			return false
+		}
+		task = shown.JSON(e.t)["task"].(map[string]any)
 		if task["state"] != state {
 			return false
 		}
@@ -241,10 +288,7 @@ type Result struct {
 func (e *Env) Run(stdin string, args ...string) Result {
 	e.t.Helper()
 	cmd := exec.Command(e.Bin, args...)
-	cmd.Env = []string{"PATH=" + strings.Join(append(e.Path, os.Getenv("PATH")), ":"), "HOME=" + e.Home}
-	for key, value := range e.Vars {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
+	cmd.Env = e.environ()
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

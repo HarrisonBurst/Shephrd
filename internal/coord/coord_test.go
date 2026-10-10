@@ -219,6 +219,28 @@ func TestUnknownLivenessRefusesEveryReplacement(t *testing.T) {
 	}
 }
 
+func TestClosingATaskAcknowledgesItsInboxItems(t *testing.T) {
+	f := newFixture(t)
+	task := f.must(f.create(main, NewTask{Repo: "api", Objective: "Work"}))
+	f.write(func(tx *store.Tx) error {
+		seq, err := Note(tx, main, task, "needs a look")
+		if err != nil {
+			return err
+		}
+		return AddItem(tx, main.String(), task, seq)
+	})
+	if items, _ := Items(f.db, `i.state = 'pending'`); len(items) != 1 {
+		t.Fatalf("pending items: %v", items)
+	}
+	if err := f.write(func(tx *store.Tx) error { return Cancel(tx, main, task) }); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := Items(f.db, `1 = 1`)
+	if len(items) != 1 || items[0].State != "acked" || items[0].AckedBy != "system" {
+		t.Fatalf("after close: %+v", items)
+	}
+}
+
 func TestStateTransitionsFollowTheLifecycle(t *testing.T) {
 	f := newFixture(t)
 	task := f.must(f.create(main, NewTask{Repo: "api", Objective: "Work"}))

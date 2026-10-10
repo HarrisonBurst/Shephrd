@@ -70,7 +70,7 @@ A driver's inbox is the durable record of the items that need its attention: que
 
 - **`inbox`** lists pending items, each with the event, the task and its current state, and the exact commands to read more, reply or acknowledge.
 - **`inbox ack <item>`** marks an item handled.
-- **`inbox wait [--after <seq>]`** is for a driver that would rather hold a connection open than receive pushes. It blocks, without polling, and streams new items as JSON lines, resuming from a cursor after a dropped connection.
+- **`inbox wait [--after <item>]`** is for a driver that would rather hold a connection open than receive pushes. It blocks, without polling, and streams new items as JSON lines, resuming from a cursor after a dropped connection.
 
 An item is `pending` until acknowledged. Acknowledging means "handled," not "answered" or "approved." Answering is `task send`, and approving is an artifacts and authority action. Acknowledging the same item again is a no-op. Closing a task acknowledges its pending items automatically, recorded as a system acknowledgement.
 

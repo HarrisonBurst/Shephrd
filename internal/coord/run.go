@@ -398,14 +398,18 @@ func Hold(tx *store.Tx, t *Task, reason string) error {
 	if err := SetState(tx, "system", t, "held", reason); err != nil {
 		return err
 	}
-	return WakeOwner(tx, t)
+	seq, err := lastSeq(tx, t.ID)
+	if err != nil {
+		return err
+	}
+	return WakeOwner(tx, t, seq)
 }
 
-// WakeOwner tells a task's owner something needs its attention. A parent
-// task gets a turn; a driver gets an inbox item from notification flow.
-func WakeOwner(tx *store.Tx, t *Task) error {
+// WakeOwner tells a task's owner that an event needs its attention. A
+// parent task gets a turn; a driver gets an inbox item.
+func WakeOwner(tx *store.Tx, t *Task, seq int64) error {
 	if t.Parent == 0 {
-		return nil
+		return AddItem(tx, t.Driver, t, seq)
 	}
 	parent, err := Load(tx, t.Parent)
 	if err != nil {

@@ -107,6 +107,7 @@ func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Get
 		if err != nil {
 			return Response{}, fault.As(err)
 		}
+		a.daemonWarning()
 		return Response{Result: result, Warnings: a.warnings}, nil
 	}
 	root.SetArgs(req.Argv)
@@ -122,6 +123,7 @@ func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Get
 	if a.streamed {
 		return Response{Streamed: true}, nil
 	}
+	a.daemonWarning()
 	if a.result == nil {
 		return Response{}, fault.New("usage", "%q needs a subcommand", strings.Join(req.Argv, " "))
 	}
