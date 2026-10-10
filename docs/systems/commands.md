@@ -137,6 +137,7 @@ Provisional. Rows owned by later specs are placeholders for those specs to final
 |---|---|---|
 | `init` | Create configuration, and the store on the home host | Command surface |
 | `version` | Binary and protocol version | Command surface |
+| `skill main`, `skill subdriver`, `skill worker` | Print the guidance for a role | Driver and worker guidance |
 | `serve` | SSH forced-command entry point | Command surface |
 | `repo add`, `repo list` | Register and list repositories | Coordination |
 | `task create` | Create a root task, or a child task from a driver run | Coordination |

@@ -84,6 +84,7 @@ Each system has its own spec:
 - [Session execution](systems/execution.md) (approved)
 - [Notification and result flow](systems/notifications.md) (approved)
 - [Artifacts and authority](systems/artifacts.md) (approved)
+- [Driver and worker guidance](systems/skill.md) (approved)
 
 Later specs decide, for each system, its data model, command and protocol shape, transport and trust details and recovery behavior. Every system spec also has an **Extensibility** section defining its events, intercept points, providers and limits on plugins, as described in [what each system spec defines](systems/extensibility.md#what-each-system-spec-defines). This proposal only fixes the responsibilities, principles and boundaries those specs must respect.
 

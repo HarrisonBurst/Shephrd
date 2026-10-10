@@ -101,6 +101,18 @@ A run that exits without reporting a result, question or blocker gets **one nudg
 
 There is no fixed deadline. A run that reports nothing, not even progress, for its role's inactivity timeout, 30 minutes by default and configurable per role, is stopped as below and gets one nudge the same way. If the nudged run is also inactive, the task is `held` with reason `inactive`. A long run that keeps reporting progress is never stopped.
 
+### Read-only sub-drivers
+
+Sub-drivers plan and supervise; [workers implement](skill.md#sub-driver). Execution enforces that split:
+
+- A driver run asks its harness provider for **read-only mode**, which disables file-editing tools where the harness supports it.
+- The files in a driver task's workspace are made **read-only** before each run. Briefs and logs live outside the workspace, so nothing a driver needs to write is inside it.
+- A sub-driver can still read, search and run `shephrd` commands.
+
+This is a guard rail, not a security boundary: it turns an accidental implementation into an error, not a judgment call.
+
+**Long turns.** A driver turn that has run longer than its turn budget, 10 minutes by default and configurable, gets one nudge: the next `shephrd` command it runs returns a `turn_long` warning telling it to delegate the remaining work and report. The turn is never stopped for length.
+
 ## Liveness and stopping
 
 | Observation | Meaning |
@@ -177,7 +189,7 @@ None of its own. Coordination's `task.start` gate runs before every run starts, 
 
 | Type | Request | Response | Built-in |
 |---|---|---|---|
-| `harness` | Mode (new or resume), brief path, workspace, model, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
+| `harness` | Mode (new or resume), read-only flag, brief path, workspace, model, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
 | `presentation` | Operation: open, probe, close, focus. For open: title, command, workspace | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
 
 A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor inside a terminal it creates, and only an exact `absent` answer counts as the endpoint being gone.
@@ -188,7 +200,7 @@ Providers never decide liveness, change workspace identity, see run tokens other
 
 ## Settled decisions
 
-1. **Every task with a repository gets its own worktree**, sub-drivers included.
+1. **Every task with a repository gets its own worktree**, sub-drivers included. Sub-driver runs are read-only, with a turn budget nudge.
 2. **Every run resumes its task's native session.** A sub-driver is one continuous session per repository, ending each turn with a checkpoint note and rotating to a new session from that note when it must.
 3. **No output parsing.** Sessions report only through `shephrd report`, with one nudge before `no_report`.
 4. **Built-in providers:** Claude Code, Codex and Pi harnesses and headless presentation ship in core. Herdr and cmux are plugins.
