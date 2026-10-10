@@ -71,7 +71,7 @@ func TestWorkerRunsInItsOwnWorkspaceAndReports(t *testing.T) {
 		t.Fatalf("harness call: %v", call)
 	}
 	vars := envOf(call)
-	for _, key := range []string{"PATH", "HOME", "SHEPHRD_CONFIG", "SHEPHRD_RUN_TOKEN"} {
+	for _, key := range []string{"PATH", "HOME", "USER", "SHEPHRD_CONFIG", "SHEPHRD_RUN_TOKEN"} {
 		if vars[key] == "" {
 			t.Fatalf("harness environment lacks %s: %v", key, vars)
 		}

@@ -25,6 +25,7 @@ type RunSpec struct {
 	Config    string            `json:"config"`
 	Path      string            `json:"path"`
 	Home      string            `json:"home"`
+	Account   []string          `json:"account,omitempty"`
 }
 
 type ExitRecord struct {
@@ -69,7 +70,7 @@ func Launch(runDir string, spec RunSpec, token string) (proc.Identity, error) {
 }
 
 func (s RunSpec) environment(token string) []string {
-	return []string{"PATH=" + s.Path, "HOME=" + s.Home, "SHEPHRD_CONFIG=" + s.Config, "SHEPHRD_RUN_TOKEN=" + token}
+	return append([]string{"PATH=" + s.Path, "HOME=" + s.Home, "SHEPHRD_CONFIG=" + s.Config, "SHEPHRD_RUN_TOKEN=" + token}, s.Account...)
 }
 
 // Supervise is the body of `shephrd _run`: it records its own identity,

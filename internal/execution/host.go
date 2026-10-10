@@ -34,6 +34,7 @@ type HostEnv struct {
 	Self         string
 	Path         string
 	Home         string
+	Account      []string
 	Harness      func(context.Context, string, HarnessRequest) (HarnessCommand, error)
 	Plugins      *plugin.Registry
 	Presentation string
@@ -60,7 +61,7 @@ func LocalEnv(cfg *config.Config, getenv config.Getenv) (HostEnv, error) {
 	if err != nil {
 		return HostEnv{}, err
 	}
-	return HostEnv{Host: cfg.Host, DataDir: cfg.DataDir, Config: cfg.Path, Self: self, Path: getenv("PATH"), Home: getenv("HOME"),
+	return HostEnv{Host: cfg.Host, DataDir: cfg.DataDir, Config: cfg.Path, Self: self, Path: getenv("PATH"), Home: getenv("HOME"), Account: config.Account(getenv),
 		Presentation: cfg.Presentation, Getenv: getenv}, nil
 }
 
@@ -119,7 +120,7 @@ func (r *Remote) Call(ctx context.Context, op string, req, resp any) error {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", r.Target, string(header))
-	cmd.Env = []string{"PATH=" + r.Getenv("PATH"), "HOME=" + r.Getenv("HOME")}
+	cmd.Env = append([]string{"PATH=" + r.Getenv("PATH"), "HOME=" + r.Getenv("HOME")}, config.Account(r.Getenv)...)
 	if sock := r.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		cmd.Env = append(cmd.Env, "SSH_AUTH_SOCK="+sock)
 	}

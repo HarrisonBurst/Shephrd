@@ -177,7 +177,7 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 		if err := os.WriteFile(BriefPath(req.RunDir), []byte(req.Brief), 0o600); err != nil {
 			return nil, err
 		}
-		req.Spec.Shephrd, req.Spec.Config, req.Spec.Path, req.Spec.Home = env.Self, env.Config, env.Path, env.Home
+		req.Spec.Shephrd, req.Spec.Config, req.Spec.Path, req.Spec.Home, req.Spec.Account = env.Self, env.Config, env.Path, env.Home, env.Account
 		if env.Presentation == "" || env.Presentation == "headless" {
 			id, err := Launch(req.RunDir, req.Spec, req.Token)
 			return LaunchResponse{PID: id.PID, Start: id.Start}, err

@@ -73,6 +73,7 @@ func (r *Registry) Call(ctx context.Context, p *Plugin, call Call) (json.RawMess
 		"SHEPHRD_PLUGIN=" + p.Name,
 		"SHEPHRD_CONFIG=" + r.cfg.Path,
 	}
+	cmd.Env = append(cmd.Env, config.Account(call.Getenv)...)
 	if call.Token != "" {
 		cmd.Env = append(cmd.Env, "SHEPHRD_CALL_TOKEN="+call.Token)
 	}
