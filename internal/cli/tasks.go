@@ -284,7 +284,7 @@ func taskCancel(a *app) *cobra.Command {
 		if err := a.gate("task.cancel", t.ID, map[string]any{"caller": caller.String(), "task": t.Ref}); err != nil {
 			return nil, err
 		}
-		return a.mutate(func(tx *store.Tx, caller Caller) (any, error) {
+		out, err := a.mutate(func(tx *store.Tx, caller Caller) (any, error) {
 			t, err := coord.GetOwned(tx, caller, args[0])
 			if err != nil {
 				return nil, err
@@ -294,6 +294,12 @@ func taskCancel(a *app) *cobra.Command {
 			}
 			return t, coord.Cancel(tx, caller, t)
 		})
+		if err == nil {
+			if s, err := a.artifacts(); err == nil {
+				s.Release(a.ctx, t.ID, false)
+			}
+		}
+		return out, err
 	})
 	return cmd
 }

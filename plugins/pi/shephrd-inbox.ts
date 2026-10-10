@@ -1,7 +1,8 @@
 // A Pi extension for a main driver running in Pi: it holds
 // `shephrd inbox wait`, hands each inbox item to the session as a
 // follow-up turn, and acknowledges the item once that turn completes.
-// An item whose turn is aborted stays pending in the inbox.
+// An item whose turn is aborted stays pending in the inbox. A Shephrd
+// session, which has no inbox, leaves it alone.
 import { execFile, spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -19,6 +20,7 @@ type Dependencies = {
   spawn: typeof spawn;
   execFile: typeof execFile;
   shephrd: string;
+  env: Record<string, string | undefined>;
 };
 
 const command = (argv: string[]) => argv.map(arg => (/^[\w./:-]+$/.test(arg) ? arg : JSON.stringify(arg))).join(" ");
@@ -36,7 +38,7 @@ function messageText(message: { content?: unknown }): string {
   return message.content.map(part => (part && typeof part === "object" && "text" in part ? String(part.text) : "")).join("");
 }
 
-export function createShephrdInbox(deps: Dependencies = { spawn, execFile, shephrd: "shephrd" }) {
+export function createShephrdInbox(deps: Dependencies = { spawn, execFile, shephrd: "shephrd", env: process.env }) {
   return function (pi: ExtensionAPI) {
     let child: ReturnType<typeof spawn> | undefined;
     let buffer = "";
@@ -55,7 +57,7 @@ export function createShephrdInbox(deps: Dependencies = { spawn, execFile, sheph
       new Promise<void>(resolve => deps.execFile(deps.shephrd, ["inbox", "ack", String(id)], () => resolve()));
 
     pi.on("session_start", async (_event, ctx) => {
-      if (ctx.mode !== "tui") return;
+      if (ctx.mode !== "tui" || deps.env.SHEPHRD_RUN_TOKEN) return;
       for (const entry of ctx.sessionManager.getBranch()) {
         if (entry.type === "custom" && entry.customType === "shephrd-inbox") {
           after = Math.max(after, (entry.data as { item: number }).item);

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,6 +21,8 @@ type pane struct {
 	PID     int    `json:"pid"`
 	Closed  bool   `json:"closed"`
 	Command string `json:"command"`
+	Label   string `json:"label"`
+	Runs    int    `json:"runs"`
 }
 
 var dir = filepath.Join(os.Getenv("HOME"), ".fakeherdr")
@@ -38,9 +41,15 @@ func main() {
 		return nil
 	}
 	switch strings.Join(args[:2], " ") {
+	case "workspace list":
+		fmt.Println(`{"result":{"workspaces":[{"workspace_id":"w1","label":"tests"}]}}`)
 	case "tab create":
 		n := strconv.Itoa(len(panes) + 1)
-		panes = append(panes, pane{ID: "p" + n, Tab: "t" + n})
+		label := ""
+		if i := slices.Index(args, "--label"); i >= 0 {
+			label = args[i+1]
+		}
+		panes = append(panes, pane{ID: "p" + n, Tab: "t" + n, Label: label})
 		save(panes)
 		fmt.Printf(`{"result":{"tab":{"tab_id":"t%s"},"root_pane":{"pane_id":"p%s"}}}`+"\n", n, n)
 	case "pane run":
@@ -54,6 +63,14 @@ func main() {
 			os.Exit(1)
 		}
 		p.PID, p.Command = cmd.Process.Pid, strings.Join(args[3:], " ")
+		p.Runs++
+		save(panes)
+	case "tab rename":
+		for i := range panes {
+			if panes[i].Tab == args[2] {
+				panes[i].Label = strings.Join(args[3:], " ")
+			}
+		}
 		save(panes)
 	case "pane get":
 		p := find(args[2])

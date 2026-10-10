@@ -71,8 +71,14 @@ A run is one turn of one session. It starts, works until it reports a result, qu
 
 1. Coordination reserves the run generation and token.
 2. Execution writes the **brief** into the workspace: role, title, objective, acceptance, the paths of [pinned inputs](artifacts.md#passing-artifacts-on), the latest notes, and for a driver task an overview of every open request with its children and the events since its last turn, plus a pointer to the repository's context file, and how to report. Each brief is bounded in size, and longer material is referenced by commands to read it rather than included.
-3. The host agent starts `shephrd _run`, the **supervisor**, inside the chosen presentation. The supervisor starts the harness in its own process group with a clean environment: `PATH`, `HOME`, the OS account's `USER`, `LOGNAME` and `TMPDIR` (harnesses find their logins through them), the host's `SHEPHRD_CONFIG` and `SHEPHRD_RUN_TOKEN`. Driver identity, terminal credentials and any parent Shephrd tokens are never passed through.
+3. The host agent starts `shephrd _run`, the **supervisor**, inside the chosen presentation. The supervisor starts the harness in its own process group with a clean environment: `PATH` with this Shephrd's directory first, `HOME`, the OS account's `USER`, `LOGNAME` and `TMPDIR` (harnesses find their logins through them), the host's `SHEPHRD_CONFIG` and `SHEPHRD_RUN_TOKEN`. Driver identity, terminal credentials and any parent Shephrd tokens are never passed through.
 4. Process identity, meaning process ID with start time, and any presentation endpoint are recorded before the harness receives the brief.
+
+### Presented runs
+
+With a terminal presentation, such as Herdr or cmux, people watch the harness work. The harness runs its own interactive interface in the terminal instead of its headless mode. Its first message points it at the brief. The supervisor checks the run for an ended turn every two seconds. Once the run has reported its result, question or blocker, or is no longer the task's current run, the supervisor waits a short grace for the harness to finish writing, then ends it. People can still type into the harness while the turn runs.
+
+A task keeps one terminal across its turns. A new run asks the presentation to reuse the endpoint of the task's previous run, and a provider that still has that terminal runs the next turn there. The terminal is labelled with the task, its role and its title. When a task closes, its terminals close once its runs have exited.
 
 ### Continuation
 
@@ -189,8 +195,8 @@ None of its own. Coordination's `task.start` gate runs before every run starts, 
 
 | Type | Request | Response | Built-in |
 |---|---|---|---|
-| `harness` | Mode (new or resume), read-only flag, brief path and text, workspace, model, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
-| `presentation` | Operation: open, probe, close, focus. For open: title, command, workspace | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
+| `harness` | Mode (new or resume), read-only flag, interactive flag, brief path and first message, workspace, model, title, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
+| `presentation` | Operation: open, probe, close, focus. For open: title, command, workspace, and the endpoint of the task's previous run to reuse | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
 
 A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor inside a terminal it creates, and only an exact `absent` answer counts as the endpoint being gone. A host names its presentation with `presentation` in its own configuration. With a terminal presentation, the run token reaches the supervisor through a private file in the run directory that the supervisor removes, never through a command line or a terminal's environment, and the supervisor records its own process identity once it starts.
 

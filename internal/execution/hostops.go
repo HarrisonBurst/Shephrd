@@ -39,6 +39,8 @@ type (
 		Brief  string  `json:"brief"`
 		Spec   RunSpec `json:"spec"`
 		Token  string  `json:"token"`
+		Title  string  `json:"title,omitempty"`
+		Reuse  string  `json:"reuse,omitempty"`
 	}
 	RunDirRequest struct {
 		RunDir string `json:"run_dir"`

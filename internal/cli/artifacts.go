@@ -23,7 +23,11 @@ func (a *app) artifacts() (*artifact.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &artifact.Service{DB: db, Cfg: cfg, Host: execution.Hosts(cfg, a.getenv), Forge: artifact.Forges(reg, a.getenv)}, nil
+	x, err := execution.New(db, cfg, reg, a.getenv)
+	if err != nil {
+		return nil, err
+	}
+	return &artifact.Service{DB: db, Cfg: cfg, Host: x.Host, Forge: artifact.Forges(reg, a.getenv)}, nil
 }
 
 // seal checks a run's result against its deliverable before it is recorded.

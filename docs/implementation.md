@@ -9,7 +9,7 @@ Milestones M1 to M9 are built and merged, each as its own pull request with end-
 Remaining work, none of it blocking use on one machine:
 
 - **Session rotation on a full context** is not implemented. Without output parsing a harness has no way to say its context is nearly full, so a sub-driver session rotates only when a task is retried. The checkpoint note every driver turn ends with is already in each brief.
-- **Live validation.** The three-machine setup is tested with a fake `ssh` and separate homes on one machine, the Herdr presentation with a fake `herdr`, the cmux presentation not at all, and the GitHub plugin with a fake `gh`. None has run against a real second machine, Herdr, cmux or GitHub. Opt-in live tests are not written yet.
+- **Live validation.** The full flow has run by hand with real Claude Code, Codex and Pi: on one machine, with a real second machine as the home host over SSH, and in real Herdr tabs. The GitHub plugin has landed pull requests on a real repository, both merged by Shephrd and merged outside it, and the macOS notifier has shown a real notification. A worker host on a real second machine and the cmux presentation have not run live; cmux only accepts outside processes on its socket in password mode. The automated suite still uses fakes, and opt-in live tests are not written yet.
 - **Forge webhooks.** Nothing receives GitHub webhooks yet, so a merge made on GitHub is proven when someone runs `shephrd task verify`. A plugin that receives the webhook and runs it would close the loop.
 - **Presentation focus** is part of the provider contract but no command uses it.
 - **A sub-driver's report deliverable** is its result text, since its workspace is read-only; the reports its workers wrote are attached as their artifacts.

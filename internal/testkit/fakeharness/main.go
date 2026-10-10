@@ -1,6 +1,8 @@
 // Command fakeharness stands in for claude, codex and pi in tests. It finds
 // its task in the brief it is given and plays the actions scripted for
-// that task's next run in $HOME/.fakeharness/script.json.
+// that task's next run in $HOME/.fakeharness/script.json. Run
+// interactively, it reads the brief its prompt points at and then waits,
+// as a harness UI does, until it is ended.
 package main
 
 import (
@@ -10,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +31,7 @@ type action struct {
 var (
 	briefTask        = regexp.MustCompile(`# Shephrd brief: (t_\d+)`)
 	briefDeliverable = regexp.MustCompile(`\*\*Deliverable:\*\* (\w+)`)
+	briefPointer     = regexp.MustCompile(`Read your Shephrd brief at (\S+) and follow it`)
 )
 
 func main() {
@@ -35,11 +39,19 @@ func main() {
 	dir := filepath.Join(home, ".fakeharness")
 	os.MkdirAll(dir, 0o700)
 	harness := filepath.Base(os.Args[0])
-	task := ""
+	interactive := !slices.Contains(os.Args, "-p") && !slices.Contains(os.Args, "--print") && !slices.Contains(os.Args, "exec")
+	task, brief := "", ""
 	for _, arg := range os.Args[1:] {
-		if m := briefTask.FindStringSubmatch(arg); m != nil {
-			task = m[1]
+		if m := briefPointer.FindStringSubmatch(arg); m != nil {
+			body, _ := os.ReadFile(m[1])
+			brief = string(body)
 		}
+		if briefTask.MatchString(arg) {
+			brief = arg
+		}
+	}
+	if m := briefTask.FindStringSubmatch(brief); m != nil {
+		task = m[1]
 	}
 	countFile := filepath.Join(dir, task+".runs")
 	body, _ := os.ReadFile(countFile)
@@ -47,18 +59,24 @@ func main() {
 	os.WriteFile(countFile, []byte(strconv.Itoa(index+1)), 0o600)
 
 	args := make([]string, 0, len(os.Args)-1)
-	brief := ""
 	for _, arg := range os.Args[1:] {
 		if briefTask.MatchString(arg) {
-			brief = arg
 			arg = "<brief>"
 		}
 		args = append(args, arg)
 	}
 	cwd, _ := os.Getwd()
-	record(dir, map[string]any{"harness": harness, "task": task, "run": index, "args": args, "cwd": cwd, "env": os.Environ(), "brief": brief})
+	record(dir, map[string]any{"harness": harness, "task": task, "run": index, "args": args, "cwd": cwd, "env": os.Environ(), "brief": brief, "interactive": interactive})
 	if harness == "codex" && !contains(args, "resume") {
-		fmt.Printf(`{"type":"thread.started","thread_id":"codex-%s-%d"}`+"\n", task, time.Now().UnixNano())
+		session := fmt.Sprintf("codex-%s-%d", task, time.Now().UnixNano())
+		if interactive {
+			sessions := filepath.Join(home, ".codex", "sessions", "2026", "01", "01")
+			os.MkdirAll(sessions, 0o700)
+			meta, _ := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"id": session, "cwd": cwd}})
+			os.WriteFile(filepath.Join(sessions, "rollout-"+session+".jsonl"), append(meta, '\n'), 0o600)
+		} else {
+			fmt.Printf(`{"type":"thread.started","thread_id":%q}`+"\n", session)
+		}
 	}
 
 	var script map[string][][]action
@@ -104,6 +122,10 @@ func main() {
 		case a.Exit != nil:
 			os.Exit(*a.Exit)
 		}
+	}
+	if interactive {
+		fmt.Println("turn finished; waiting for input")
+		time.Sleep(time.Hour)
 	}
 }
 

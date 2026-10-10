@@ -114,7 +114,7 @@ func (a *app) daemonWarning() {
 		return
 	}
 	switch a.req.Argv[0] {
-	case "daemon", "_started", "_exited":
+	case "daemon", "_started", "_exited", "_turn":
 		return
 	}
 	if !daemon.Running(a.cfg) {

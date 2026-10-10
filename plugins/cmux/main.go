@@ -1,6 +1,6 @@
 // Command shephrd-cmux is a Shephrd presentation provider: it runs each
-// session's supervisor in its own cmux workspace. Shephrd still owns the
-// process; cmux only shows it.
+// task's sessions in one cmux workspace, reused across the task's turns.
+// Shephrd still owns the process; cmux only shows it.
 package main
 
 import (
@@ -23,6 +23,7 @@ type request struct {
 		Command   string `json:"command"`
 		Workspace string `json:"workspace"`
 		Endpoint  string `json:"endpoint"`
+		Reuse     string `json:"reuse"`
 	} `json:"body"`
 }
 
@@ -81,6 +82,15 @@ func handle(req request) (map[string]string, error) {
 	}
 	switch req.Body.Operation {
 	case "open":
+		var previous endpoint
+		if json.Unmarshal([]byte(req.Body.Reuse), &previous) == nil && previous.Workspace != "" {
+			if out, err := cmux("tree", "--workspace", previous.Workspace, "--window", previous.Window); err == nil && strings.Contains(string(out), previous.Surface) {
+				cmux("workspace", "rename", previous.Workspace, "--title", req.Body.Title, "--window", previous.Window)
+				if run(previous, req.Body.Command) == nil {
+					return map[string]string{"endpoint": req.Body.Reuse}, nil
+				}
+			}
+		}
 		out, err := cmux("workspace", "create", "--name", req.Body.Title, "--cwd", req.Body.Workspace, "--window", window, "--focus", "false")
 		if err != nil {
 			return nil, err
@@ -88,11 +98,7 @@ func handle(req request) (map[string]string, error) {
 		if err := json.Unmarshal(out, &at); err != nil || at.Workspace == "" || at.Surface == "" {
 			return nil, fmt.Errorf("cmux workspace create returned no surface: %s", out)
 		}
-		target := []string{"--workspace", at.Workspace, "--surface", at.Surface, "--window", at.Window}
-		if _, err := cmux(append(append([]string{"send"}, target...), "--", req.Body.Command)...); err == nil {
-			_, err = cmux(append(append([]string{"send-key"}, target...), "enter")...)
-		}
-		if err != nil {
+		if err := run(at, req.Body.Command); err != nil {
 			cmux("workspace", "close", at.Workspace, "--window", at.Window)
 			return nil, err
 		}
@@ -120,4 +126,14 @@ func handle(req request) (map[string]string, error) {
 		return map[string]string{}, err
 	}
 	return nil, fmt.Errorf("unknown presentation operation %q", req.Body.Operation)
+}
+
+// run types a command into a surface's shell and presses enter.
+func run(at endpoint, command string) error {
+	target := []string{"--workspace", at.Workspace, "--surface", at.Surface, "--window", at.Window}
+	_, err := cmux(append(append([]string{"send"}, target...), "--", command)...)
+	if err == nil {
+		_, err = cmux(append(append([]string{"send-key"}, target...), "enter")...)
+	}
+	return err
 }

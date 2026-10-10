@@ -164,7 +164,7 @@ func TestStopConfirmsAndStaleRunInputIsRefused(t *testing.T) {
 	}
 	env.WaitState("t_1", "done")
 	args := toStrings(callsFor(env, "t_1", 1)[0]["args"])
-	if !slices.Contains(args, "resume") || !strings.HasPrefix(args[slices.Index(args, "resume")+1], "codex-t_1-") {
+	if !slices.Contains(args, "resume") || !strings.HasPrefix(args[len(args)-2], "codex-t_1-") {
 		t.Fatalf("resume args: %v", args)
 	}
 
