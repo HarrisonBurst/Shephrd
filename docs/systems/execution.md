@@ -78,7 +78,7 @@ A run is one turn of one session. It starts, works until it reports a result, qu
 
 With a terminal presentation, such as Herdr or cmux, people watch the harness work. The harness runs its own interactive interface in the terminal instead of its headless mode. Its first message points it at the brief. The supervisor checks the run for an ended turn every two seconds. Once the run has reported its result, question or blocker, or is no longer the task's current run, the supervisor waits a short grace for the harness to finish writing, then ends it. People can still type into the harness while the turn runs.
 
-A terminal is labelled with the task, its role and its title. After a reported turn has fully exited and its process is proven gone, execution closes that run's terminal. A continuation opens a fresh terminal while resuming the task's native harness session in the same attempt and workspace; terminal reuse is not session resume. Execution retries closing an eligible idle terminal during reconciliation. It never closes an unreported, live or unknown run's terminal, or an endpoint whose identity or ownership is uncertain. A task's remaining terminals close when it closes, subject to the same safety checks.
+A terminal is labelled with the task, its role and its title. Its shell executes the supervisor, rather than remaining behind it; after a reported turn the supervisor exits and the terminal closes with its own process. A continuation opens a fresh terminal while resuming the task's native harness session in the same attempt and workspace; terminal reuse is not session resume. When the harness exits without reporting or fails to start, the supervisor prints a task-log hint and holds the terminal until Enter, run supersession or task stop. The daemon can supersede an unreported run after recording its harness exit, then give the run its one nudge. Execution never closes a presentation endpoint by ID: a probe cannot establish ownership atomically with a later close.
 
 ### Continuation
 
@@ -127,7 +127,7 @@ This is a guard rail, not a security boundary: it turns an accidental implementa
 | `exited` | The supervisor reported the exit, or the host agent proved the process is gone. |
 | `unknown` | The host is unreachable, or the probe could not prove either. |
 
-The supervisor reports the harness's exit through the host agent. If the supervisor itself dies, the daemon probes the recorded process. Only `exited` lets coordination resume, retry or release.
+The supervisor writes the harness exit record before it exits; it cannot report its own process as exited while it still runs. The daemon or explicit reconciliation probes the recorded supervisor identity and process group through the host agent and applies the exit record only after both are proven gone. An uncertain identity or live group stays unknown, not exited; a host outage retains recoverable state. Stopping records `exited` only after the group is confirmed gone. A stop requested before `_started` refuses `_started`, so it cannot launch a harness after the stop. Only proven `exited` lets coordination resume, retry or release.
 
 Stopping sends a termination signal to the run's whole process group, waits a bounded grace period, then kills it. The run counts as stopped only once the host agent confirms the group is reaped. If that cannot be confirmed, the run is `unknown` and nothing that needs it gone proceeds. A stop never removes the workspace.
 
@@ -155,7 +155,7 @@ The task's target names the harness and an opaque model string. Execution passes
 | `workspace reconcile` | Classify interrupted effects on every host |
 | `host list` | Configured hosts with reachability, version and installed providers |
 
-`shephrd agent`, `shephrd _run` and the supervisor's `_started` and `_exited` are private commands between Shephrd binaries of the same release, not part of the public command surface. The supervisor records its own process identity with `_started`, using its run token, before it starts the harness, so the identity is recorded even if the process that launched it dies.
+`shephrd agent`, `shephrd _run` and the supervisor's `_started` are private commands between Shephrd binaries of the same release, not part of the public command surface. The supervisor records its own process identity with `_started`, using its run token, before it starts the harness, so the identity is recorded even if the process that launched it dies.
 
 ## Failure behavior
 
@@ -196,9 +196,9 @@ None of its own. Coordination's `task.start` gate runs before every run starts, 
 | Type | Request | Response | Built-in |
 |---|---|---|---|
 | `harness` | Mode (new or resume), read-only flag, interactive flag, brief path and first message, workspace, model, title, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
-| `presentation` | Operation: open, probe, close, focus. For open: title, command and workspace | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
+| `presentation` | Operation: open, probe, focus. For open: title, command and workspace | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
 
-A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor inside a terminal it creates. Execution closes only a recorded endpoint whose run's process is proven gone and whose exact endpoint is still present; an uncertain probe or ambiguous ownership leaves the terminal open. The provider revalidates the endpoint's recorded identity when handling `close`, rather than relying on an earlier `probe`; mismatched or uncertain ownership refuses the close. Only an exact `absent` answer counts as the endpoint being gone. A host names its presentation with `presentation` in its own configuration. With a terminal presentation, the run token reaches the supervisor through a private file in the run directory that the supervisor removes, never through a command line or a terminal's environment, and the supervisor records its own process identity once it starts.
+A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor in a terminal whose shell is replaced by the supervisor. Execution never asks a provider to close an endpoint: neither an earlier probe nor a second check before an ID-based close can protect against a concurrent change in ownership. Only an exact `absent` answer counts as the endpoint being gone; absence alone does not prove the supervisor's process group has exited. A host names its presentation with `presentation` in its own configuration. With a terminal presentation, the run token reaches the supervisor through a private file in the run directory that the supervisor removes, never through a command line or a terminal's environment, and the supervisor records its own process identity once it starts.
 
 ### Limits
 
