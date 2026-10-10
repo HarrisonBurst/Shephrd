@@ -51,7 +51,7 @@ func forward(ctx context.Context, cfg *config.Config, req Request, as string, st
 			}
 		}
 		cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", cfg.Home, string(envelope))
-		cmd.Env = []string{"PATH=" + getenv("PATH"), "HOME=" + getenv("HOME")}
+		cmd.Env = append([]string{"PATH=" + getenv("PATH"), "HOME=" + getenv("HOME")}, config.Account(getenv)...)
 		if sock := getenv("SSH_AUTH_SOCK"); sock != "" {
 			cmd.Env = append(cmd.Env, "SSH_AUTH_SOCK="+sock)
 		}

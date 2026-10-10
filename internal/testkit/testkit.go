@@ -175,7 +175,7 @@ func (e *Env) DaemonLog() string {
 }
 
 func (e *Env) environ() []string {
-	env := []string{"PATH=" + strings.Join(append(e.Path, os.Getenv("PATH")), ":"), "HOME=" + e.Home}
+	env := []string{"PATH=" + strings.Join(append(e.Path, os.Getenv("PATH")), ":"), "HOME=" + e.Home, "USER=" + os.Getenv("USER")}
 	for key, value := range e.Vars {
 		env = append(env, key+"="+value)
 	}

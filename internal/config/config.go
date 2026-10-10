@@ -122,6 +122,19 @@ var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type Getenv func(string) string
 
+// Account returns the variables naming the machine's OS account. They are
+// not a Shephrd identity, but tools such as Claude Code and gh find their
+// logins, kept in the macOS Keychain, through them.
+func Account(getenv Getenv) []string {
+	var env []string
+	for _, key := range []string{"USER", "LOGNAME", "TMPDIR"} {
+		if value := getenv(key); value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
+}
+
 var NamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 func Path(getenv Getenv) (string, error) {
