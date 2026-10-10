@@ -196,16 +196,11 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 		if err != nil {
 			return nil, err
 		}
-		return StateResponse{State: id.Probe()}, nil
-	case "probe_group":
-		req, err := decode[StopRequest](body)
-		if err != nil {
-			return nil, err
+		state := id.Probe()
+		if state == "exited" && proc.GroupAlive(id.PID) {
+			state = "unknown"
 		}
-		if proc.GroupAlive(req.PGID) {
-			return StateResponse{State: "live"}, nil
-		}
-		return StateResponse{State: "exited"}, nil
+		return StateResponse{State: state}, nil
 	case "stop":
 		req, err := decode[StopRequest](body)
 		if err != nil {
@@ -222,6 +217,13 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, err
 		}
 		record, found := ReadExit(req.RunDir)
+		if !found {
+			body, _ := os.ReadFile(filepath.Join(req.RunDir, "run.json"))
+			var spec RunSpec
+			if json.Unmarshal(body, &spec) == nil && spec.Harness == "codex" && !spec.Interactive {
+				record.Session = codexSession(LogPath(req.RunDir))
+			}
+		}
 		return ExitResponse{Record: record, Found: found}, nil
 	case "read_log":
 		req, err := decode[RunDirRequest](body)

@@ -131,16 +131,24 @@ func (d *Daemon) pass(ctx context.Context) {
 	}
 	if time.Since(d.lastReconcile) >= reconcileEach {
 		d.lastReconcile = time.Now()
-		if _, err := x.Reconcile(ctx); err != nil {
+		if out, err := x.Reconcile(ctx); err != nil {
 			d.logf("reconcile: %v", err)
+		} else {
+			for _, run := range out.Runs {
+				if run["liveness"] == "exited" {
+					if id, err := coord.ParseTaskRef(run["task"]); err == nil {
+						d.releaseClosed(ctx, x, &cfg, id)
+					}
+				}
+			}
 		}
 	}
-	x.CloseReportedTerminals(ctx)
 	for _, step := range []struct {
 		name string
 		run  func() error
 	}{
 		{"runs", func() error { return d.observe(ctx, x, &cfg) }},
+		{"nudges", func() error { return d.nudge(ctx, x) }},
 		{"wakes", func() error { return d.wake(ctx, x, reg, &cfg) }},
 		{"delivery", func() error { return d.deliver(ctx, reg, &cfg) }},
 		{"events", func() error { return d.dispatch(ctx, reg) }},
@@ -174,6 +182,9 @@ func (d *Daemon) observe(ctx context.Context, x *execution.Executor, cfg *config
 			continue
 		}
 		if observed != "live" {
+			if observed == "exited" {
+				d.releaseClosed(ctx, x, cfg, r.Task)
+			}
 			continue
 		}
 		t, err := coord.Load(d.db, r.Task)
@@ -192,6 +203,14 @@ func (d *Daemon) observe(ctx context.Context, x *execution.Executor, cfg *config
 		case idle >= limit:
 			reason = "inactive"
 		}
+		if reason == "" && !r.TurnReported {
+			if host, err := x.Host(r.Host); err == nil {
+				var exit execution.ExitResponse
+				if host.Call(ctx, "exit_record", execution.RunDirRequest{RunDir: r.Dir}, &exit) == nil && exit.Found {
+					reason = "no_report"
+				}
+			}
+		}
 		if reason != "" {
 			if err := x.Interrupt(ctx, r, reason); err != nil {
 				d.logf("interrupt %s: %v", t.Ref, err)
@@ -199,6 +218,37 @@ func (d *Daemon) observe(ctx context.Context, x *execution.Executor, cfg *config
 		}
 	}
 	return nil
+}
+
+func (d *Daemon) nudge(ctx context.Context, x *execution.Executor) error {
+	runs, err := coord.Runs(d.db, `liveness = 'exited' AND turn_reported = 0 AND stop_reason = '' AND purpose != 'nudge' AND id = (SELECT run FROM tasks WHERE tasks.id = runs.task)`)
+	if err != nil {
+		return err
+	}
+	for _, r := range runs {
+		t, err := coord.Load(d.db, r.Task)
+		if err != nil {
+			return err
+		}
+		if t.State != "running" && t.State != "waiting" {
+			continue
+		}
+		if _, err := x.Start(ctx, "system", t.ID, "nudge", nil); err != nil {
+			d.logf("nudge %s: %v", t.Ref, err)
+		}
+	}
+	return nil
+}
+
+func (d *Daemon) releaseClosed(ctx context.Context, x *execution.Executor, cfg *config.Config, id int64) {
+	t, err := coord.Load(d.db, id)
+	if err != nil || t.State != "closed" {
+		return
+	}
+	service := artifact.Service{DB: d.db, Cfg: cfg, Host: x.Host}
+	if _, _, err := service.Release(ctx, id, false); err != nil {
+		d.logf("release %s: %v", t.Ref, err)
+	}
 }
 
 // wake starts a continuation turn for each task with something new, once

@@ -213,14 +213,7 @@ func (s *Service) Release(ctx context.Context, id int64, force bool) (released, 
 			retained = append(retained, a.Workspace)
 		}
 	}
-	if t.State == "closed" {
-		s.closeTerminals(ctx, t)
-	}
 	return released, retained, nil
-}
-
-func (s *Service) closeTerminals(ctx context.Context, t *coord.Task) {
-	(&execution.Executor{DB: s.DB, Host: s.Host}).CloseIdleTerminals(ctx, t.ID)
 }
 
 // removable is true only when no run of the attempt might still be alive.

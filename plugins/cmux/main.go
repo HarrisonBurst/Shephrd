@@ -89,24 +89,12 @@ func handle(req request) (map[string]string, error) {
 			return nil, fmt.Errorf("cmux workspace create returned no surface: %s", out)
 		}
 		if err := run(at, req.Body.Command); err != nil {
-			cmux("workspace", "close", at.Workspace, "--window", at.Window)
 			return nil, err
 		}
 		encoded, _ := json.Marshal(at)
 		return map[string]string{"endpoint": string(encoded)}, nil
 	case "probe":
 		return map[string]string{"state": workspaceState(at)}, nil
-	case "close":
-		switch workspaceState(at) {
-		case "absent":
-			return map[string]string{}, nil
-		case "present":
-			if _, err := cmux("workspace", "close", at.Workspace, "--window", at.Window); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
-				return nil, err
-			}
-			return map[string]string{}, nil
-		}
-		return nil, fmt.Errorf("workspace %s ownership is uncertain", at.Workspace)
 	case "focus":
 		_, err := cmux("workspace", "select", at.Workspace, "--window", at.Window)
 		return map[string]string{}, err

@@ -56,19 +56,29 @@ func (x *Executor) Interrupt(ctx context.Context, r *coord.Run, reason string) e
 	}
 	r.StopReason = reason
 	if !x.stopGroup(ctx, r) {
-		return x.write(ctx, func(tx *store.Tx) error { return coord.SetLiveness(tx, r, "unknown") })
+		return x.write(ctx, func(tx *store.Tx) error {
+			if err := coord.SetLiveness(tx, r, "unknown"); err != nil {
+				return err
+			}
+			t, err := coord.Load(tx, r.Task)
+			if err != nil || t.State == "held" {
+				return err
+			}
+			return coord.Hold(tx, t, reason)
+		})
 	}
+	session := x.stoppedSession(ctx, r)
 	if _, err := x.run(ctx, r.Task, "nudge", func(tx *store.Tx, t *coord.Task) (bool, error) {
-		if _, err := coord.RecordExit(tx, r, -1, ""); err != nil {
+		if _, err := coord.RecordExit(tx, r, -1, session); err != nil {
 			return false, err
 		}
 		switch {
 		case reason == "turn_ended" && t.Role == "driver" && t.State == "running":
 			return false, coord.SettleDriver(tx, t)
-		case reason != "inactive" || (t.State != "running" && t.State != "waiting"):
+		case (reason != "inactive" && reason != "no_report") || (t.State != "running" && t.State != "waiting"):
 			return false, nil
 		case r.Purpose == "nudge":
-			return false, coord.Hold(tx, t, "inactive")
+			return false, coord.Hold(tx, t, reason)
 		}
 		return true, nil
 	}); err != nil {

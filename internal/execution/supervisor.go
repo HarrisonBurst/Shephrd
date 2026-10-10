@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -155,21 +156,26 @@ func Supervise(runDir string) int {
 	case spec.Harness == "codex":
 		record.Session = codexSession(LogPath(runDir))
 	}
-	out, _ := json.Marshal(record)
-	os.WriteFile(ExitPath(runDir), out, 0o600)
-	args := []string{"_exited", "--status", strconv.Itoa(status)}
-	if record.Session != "" {
-		args = append(args, "--session", record.Session)
-	}
-	for attempt := 0; attempt < 5; attempt++ {
-		if err := spec.shephrd(token, args...); err == nil {
-			return 0
-		} else {
-			fmt.Fprintln(os.Stderr, "record exit:", err)
+	hold := false
+	if spec.Interactive {
+		out, err := spec.shephrdOutput(token, "_turn")
+		var turn struct {
+			Ended bool `json:"ended"`
 		}
-		time.Sleep(time.Duration(attempt+1) * time.Second)
+		hold = err != nil || json.Unmarshal(out, &turn) != nil || !turn.Ended
+		if hold {
+			fmt.Printf("\nShephrd run ended without a completed report. Read its log: shephrd task log %s\nPress Enter to leave this terminal.\n", filepath.Base(filepath.Dir(runDir)))
+		}
 	}
-	return 1
+	out, _ := json.Marshal(record)
+	if err := os.WriteFile(ExitPath(runDir), out, 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "write exit record:", err)
+		return 1
+	}
+	if hold {
+		bufio.NewReader(os.Stdin).ReadString('\n')
+	}
+	return 0
 }
 
 // shephrd runs one of the supervisor's own commands, keeping its output

@@ -157,24 +157,12 @@ func handle(req request) (map[string]string, error) {
 		}
 		at = endpoint{Tab: created.Result.Tab.ID, Pane: created.Result.RootPane.ID}
 		if _, _, err := herdr("pane", "run", at.Pane, req.Body.Command); err != nil {
-			herdr("pane", "close", at.Pane)
 			return nil, err
 		}
 		encoded, _ := json.Marshal(at)
 		return map[string]string{"endpoint": string(encoded)}, nil
 	case "probe":
 		return map[string]string{"state": paneState(at)}, nil
-	case "close":
-		switch paneState(at) {
-		case "absent":
-			return map[string]string{}, nil
-		case "present":
-			if _, code, err := herdr("pane", "close", at.Pane); err != nil && !strings.HasSuffix(code, "_not_found") {
-				return nil, err
-			}
-			return map[string]string{}, nil
-		}
-		return nil, fmt.Errorf("pane %s ownership is uncertain", at.Pane)
 	case "focus":
 		_, _, err := herdr("tab", "focus", at.Tab)
 		return map[string]string{}, err

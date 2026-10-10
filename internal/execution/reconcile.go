@@ -38,7 +38,6 @@ func (x *Executor) Reconcile(ctx context.Context) (*Reconciled, error) {
 		}
 		out.Runs = append(out.Runs, map[string]string{"task": coord.TaskRef(r.Task), "run": r.Dir, "liveness": observed})
 	}
-	x.CloseReportedTerminals(ctx)
 	return out, nil
 }
 

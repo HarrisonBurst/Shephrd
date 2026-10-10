@@ -19,7 +19,7 @@ type LaunchResponse struct {
 }
 
 // PresentationRequest is the presentation provider contract: open a
-// terminal running a command, probe or close an endpoint, or focus it.
+// terminal running a command, probe an endpoint, or focus it.
 type PresentationRequest struct {
 	Operation string `json:"operation"`
 	Title     string `json:"title,omitempty"`
@@ -49,7 +49,7 @@ func present(ctx context.Context, env HostEnv, req LaunchRequest) (string, error
 	if err := os.WriteFile(tokenPath(req.RunDir), []byte(req.Token), 0o600); err != nil {
 		return "", err
 	}
-	command := "clear; " + shellQuote(env.Self) + " _run " + shellQuote(req.RunDir)
+	command := "clear; exec " + shellQuote(env.Self) + " _run " + shellQuote(req.RunDir)
 	resp, err := presentation(ctx, env, PresentationRequest{Operation: "open", Title: req.Title, Command: command, Workspace: req.Spec.Workspace})
 	if err != nil {
 		os.Remove(tokenPath(req.RunDir))
