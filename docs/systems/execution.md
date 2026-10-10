@@ -135,7 +135,7 @@ Stopping sends a termination signal to the run's whole process group, waits a bo
 
 Interrupted effects, such as a crash between recording intent and creating a worktree, are classified by reconciliation:
 
-- An `allocating` workspace with nothing on disk becomes `none`. One whose exact worktree exists becomes `held`. Anything partial or mismatched becomes `unknown`.
+- An `allocating` workspace with nothing on disk becomes `none`. One whose exact worktree exists becomes `held`. Anything partial or mismatched becomes `unknown`. Before applying a classification, reconciliation rechecks that the attempt is still `allocating`, so it cannot overwrite a concurrently completed workspace identity or base commit.
 - A run whose process is proven gone becomes `exited`.
 - An authorized removal that was interrupted is finished once its identity is re-verified.
 
