@@ -301,9 +301,41 @@ func privateRunCommands(a *app) []*cobra.Command {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"run": caller.Run}, x.Exited(a.ctx, caller.Run, status, session)
+		if err := x.Exited(a.ctx, caller.Run, status, session); err != nil {
+			return nil, err
+		}
+		if r, err := coord.LoadRun(x.DB, caller.Run); err == nil {
+			if t, err := coord.Load(x.DB, r.Task); err == nil && t.State == "closed" {
+				if s, err := a.artifacts(); err == nil {
+					s.Release(a.ctx, t.ID, false)
+				}
+			}
+		}
+		return map[string]any{"run": caller.Run}, nil
 	})
-	return []*cobra.Command{started, exited}
+	turn := &cobra.Command{Use: "_turn", Hidden: true, Args: cobra.NoArgs}
+	turn.RunE = a.run(func(*cobra.Command, []string) (any, error) {
+		caller, err := a.identity()
+		if err != nil {
+			return nil, err
+		}
+		if caller.Kind != "run" {
+			return nil, fault.New("not_a_run", "only a supervisor asks whether its run's turn ended")
+		}
+		db, err := a.store()
+		if err != nil {
+			return nil, err
+		}
+		if coord.RequireCurrent(db, caller) != nil {
+			return map[string]any{"ended": true}, nil
+		}
+		r, err := coord.LoadRun(db, caller.Run)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ended": r.TurnReported}, nil
+	})
+	return []*cobra.Command{started, exited, turn}
 }
 
 func workspaceCommand(a *app) *cobra.Command {

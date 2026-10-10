@@ -1,6 +1,6 @@
 // Command shephrd-herdr is a Shephrd presentation provider: it runs each
-// session's supervisor in its own Herdr tab. Shephrd still owns the
-// process; Herdr only shows it.
+// task's sessions in one Herdr tab, reused across the task's turns.
+// Shephrd still owns the process; Herdr only shows it.
 package main
 
 import (
@@ -23,6 +23,7 @@ type request struct {
 		Command   string `json:"command"`
 		Workspace string `json:"workspace"`
 		Endpoint  string `json:"endpoint"`
+		Reuse     string `json:"reuse"`
 	} `json:"body"`
 }
 
@@ -63,7 +64,10 @@ func main() {
 // herdr runs one Herdr command; a not-found answer comes back as code.
 func herdr(args ...string) ([]byte, string, error) {
 	cmd := exec.Command("herdr", args...)
-	cmd.Env = append(os.Environ(), "HERDR_SOCKET_PATH="+socket)
+	cmd.Env = os.Environ()
+	if socket != "" {
+		cmd.Env = append(cmd.Env, "HERDR_SOCKET_PATH="+socket)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -79,9 +83,49 @@ func herdr(args ...string) ([]byte, string, error) {
 	return stdout.Bytes(), "", nil
 }
 
+// workspaceID finds the configured workspace by ID or label, creating a
+// workspace with that label when there is none.
+func workspaceID() (string, error) {
+	out, _, err := herdr("workspace", "list")
+	if err != nil {
+		return "", err
+	}
+	var listed struct {
+		Result struct {
+			Workspaces []struct {
+				ID    string `json:"workspace_id"`
+				Label string `json:"label"`
+			} `json:"workspaces"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &listed); err != nil {
+		return "", fmt.Errorf("herdr workspace list: %v", err)
+	}
+	for _, w := range listed.Result.Workspaces {
+		if w.ID == workspace || w.Label == workspace {
+			return w.ID, nil
+		}
+	}
+	out, _, err = herdr("workspace", "create", "--label", workspace, "--no-focus")
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		Result struct {
+			Workspace struct {
+				ID string `json:"workspace_id"`
+			} `json:"workspace"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &created); err != nil || created.Result.Workspace.ID == "" {
+		return "", fmt.Errorf("herdr workspace create returned no workspace: %s", out)
+	}
+	return created.Result.Workspace.ID, nil
+}
+
 func handle(req request) (map[string]string, error) {
-	if socket == "" || workspace == "" {
-		return nil, fmt.Errorf("the herdr plugin needs socket and workspace options")
+	if workspace == "" {
+		workspace = "Shephrd tasks"
 	}
 	var at endpoint
 	if req.Body.Endpoint != "" {
@@ -91,7 +135,20 @@ func handle(req request) (map[string]string, error) {
 	}
 	switch req.Body.Operation {
 	case "open":
-		out, _, err := herdr("tab", "create", "--workspace", workspace, "--cwd", req.Body.Workspace, "--label", req.Body.Title, "--no-focus")
+		var previous endpoint
+		if json.Unmarshal([]byte(req.Body.Reuse), &previous) == nil && previous.Pane != "" {
+			if _, _, err := herdr("pane", "get", previous.Pane); err == nil {
+				herdr("tab", "rename", previous.Tab, req.Body.Title)
+				if _, _, err := herdr("pane", "run", previous.Pane, req.Body.Command); err == nil {
+					return map[string]string{"endpoint": req.Body.Reuse}, nil
+				}
+			}
+		}
+		id, err := workspaceID()
+		if err != nil {
+			return nil, err
+		}
+		out, _, err := herdr("tab", "create", "--workspace", id, "--cwd", req.Body.Workspace, "--label", req.Body.Title, "--no-focus")
 		if err != nil {
 			return nil, err
 		}

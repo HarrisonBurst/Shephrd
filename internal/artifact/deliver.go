@@ -213,7 +213,33 @@ func (s *Service) Release(ctx context.Context, id int64, force bool) (released, 
 			retained = append(retained, a.Workspace)
 		}
 	}
+	if t.State == "closed" {
+		s.closeTerminals(ctx, t)
+	}
 	return released, retained, nil
+}
+
+// closeTerminals closes the terminals a closed task's runs were shown in.
+// A terminal already gone, or a host out of reach, is left as it is.
+func (s *Service) closeTerminals(ctx context.Context, t *coord.Task) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT host, endpoint FROM runs WHERE task = ? AND endpoint != '' AND liveness = 'exited'`, t.ID)
+	if err != nil {
+		return
+	}
+	type shown struct{ host, endpoint string }
+	var terminals []shown
+	for rows.Next() {
+		var row shown
+		if rows.Scan(&row.host, &row.endpoint) == nil {
+			terminals = append(terminals, row)
+		}
+	}
+	rows.Close()
+	for _, row := range terminals {
+		if host, err := s.Host(row.host); err == nil {
+			host.Call(ctx, "presentation", execution.PresentationRequest{Operation: "close", Endpoint: row.endpoint}, nil)
+		}
+	}
 }
 
 // removable is true only when no run of the attempt might still be alive.

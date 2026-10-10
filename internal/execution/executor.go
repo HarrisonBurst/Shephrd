@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"shephrd/internal/config"
@@ -247,10 +248,16 @@ func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coor
 	if a.Session != "" {
 		mode = "resume"
 	}
+	interactive := info.Presentation != "" && info.Presentation != "headless"
+	prompt := brief
+	if interactive {
+		prompt = fmt.Sprintf("Read your Shephrd brief at %s and follow it. It names your task, your workspace and how to report.", BriefPath(run.Dir))
+	}
+	label := TabLabel(t)
 	var command HarnessCommand
 	err = host.Call(ctx, "harness", HarnessCall{Name: a.Harness, Request: HarnessRequest{
-		Mode: mode, ReadOnly: t.Role == "driver", Brief: BriefPath(run.Dir), Prompt: brief,
-		Workspace: a.Workspace, Model: a.Model, Session: a.Session, Title: t.Ref + " " + t.Title,
+		Mode: mode, ReadOnly: t.Role == "driver", Interactive: interactive, Brief: BriefPath(run.Dir), Prompt: prompt,
+		Workspace: a.Workspace, Model: a.Model, Session: a.Session, Title: label,
 	}}, &command)
 	if err != nil {
 		return fail(err)
@@ -268,9 +275,13 @@ func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coor
 		}
 	}
 	var launched LaunchResponse
+	var reuse string
+	if interactive {
+		x.DB.QueryRowContext(ctx, `SELECT endpoint FROM runs WHERE task = ? AND id != ? AND endpoint != '' ORDER BY id DESC LIMIT 1`, t.ID, run.ID).Scan(&reuse)
+	}
 	err = host.Call(ctx, "launch", LaunchRequest{
-		RunDir: run.Dir, Brief: brief, Token: token,
-		Spec: RunSpec{Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness},
+		RunDir: run.Dir, Brief: brief, Token: token, Title: label, Reuse: reuse,
+		Spec: RunSpec{Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness, Interactive: interactive, Label: label},
 	}, &launched)
 	if err != nil {
 		return fail(err)
@@ -545,4 +556,13 @@ func (x *Executor) Log(ctx context.Context, r *coord.Run, limit int64) (LogRespo
 	}
 	var out LogResponse
 	return out, host.Call(ctx, "read_log", RunDirRequest{RunDir: r.Dir, Limit: limit}, &out)
+}
+
+// TabLabel names a task's terminal for people: its ID, role and title.
+func TabLabel(t *coord.Task) string {
+	label := t.Ref + " " + t.Role + " · " + t.Title
+	if runes := []rune(label); len(runes) > 60 {
+		label = strings.TrimSpace(string(runes[:59])) + "…"
+	}
+	return label
 }

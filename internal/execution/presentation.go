@@ -20,12 +20,15 @@ type LaunchResponse struct {
 
 // PresentationRequest is the presentation provider contract: open a
 // terminal running a command, probe or close an endpoint, or focus it.
+// An open may name the endpoint of the task's previous run to reuse, so
+// one task keeps one terminal across its turns.
 type PresentationRequest struct {
 	Operation string `json:"operation"`
 	Title     string `json:"title,omitempty"`
 	Command   string `json:"command,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
 	Endpoint  string `json:"endpoint,omitempty"`
+	Reuse     string `json:"reuse,omitempty"`
 }
 
 type PresentationResponse struct {
@@ -50,7 +53,7 @@ func present(ctx context.Context, env HostEnv, req LaunchRequest) (string, error
 		return "", err
 	}
 	command := shellQuote(env.Self) + " _run " + shellQuote(req.RunDir)
-	resp, err := presentation(ctx, env, PresentationRequest{Operation: "open", Title: filepath.Base(filepath.Dir(req.RunDir)), Command: command, Workspace: req.Spec.Workspace})
+	resp, err := presentation(ctx, env, PresentationRequest{Operation: "open", Title: req.Title, Command: command, Workspace: req.Spec.Workspace, Reuse: req.Reuse})
 	if err != nil {
 		os.Remove(tokenPath(req.RunDir))
 		return "", err
