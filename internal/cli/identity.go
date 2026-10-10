@@ -44,7 +44,18 @@ func (a *app) resolveCaller() (Caller, error) {
 			return Caller{}, fault.New("invalid_token", "a request carries either a run token or a call token, not both")
 		}
 		if a.req.RunToken != "" {
-			return Caller{}, fault.New("invalid_token", "the run token does not belong to a current run")
+			db, err := a.store()
+			if err != nil {
+				return Caller{}, err
+			}
+			caller, run, err := coord.RunCaller(db, a.req.RunToken)
+			if err != nil {
+				return Caller{}, err
+			}
+			if !strings.HasPrefix(a.req.Argv[0], "_") {
+				a.turnBudget(caller, run)
+			}
+			return caller, nil
 		}
 		return a.callTokenCaller()
 	}

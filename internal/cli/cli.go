@@ -3,17 +3,21 @@ package cli
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"shephrd/internal/config"
+	"shephrd/internal/coord"
+	"shephrd/internal/execution"
 	"shephrd/internal/fault"
 	"shephrd/internal/plugin"
 	"shephrd/internal/store"
@@ -42,6 +46,9 @@ type Response struct {
 }
 
 func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv config.Getenv) int {
+	if len(args) == 2 && args[0] == "_run" {
+		return execution.Supervise(args[1])
+	}
 	if isHelp(args) {
 		root := newRoot(nil)
 		root.SetArgs(args)
@@ -224,6 +231,15 @@ func (a *app) run(fn func(cmd *cobra.Command, args []string) (any, error)) func(
 	}
 }
 
+func (a *app) digest() string {
+	digest := sha256.New()
+	json.NewEncoder(digest).Encode(a.req.Argv)
+	digest.Write(a.stdin)
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+// mutate runs a mutation in one transaction, idempotent by key. A run's
+// mutations count only while it is its task's current run.
 func (a *app) mutate(fn func(tx *store.Tx, caller Caller) (any, error)) (any, error) {
 	caller, err := a.identity()
 	if err != nil {
@@ -233,12 +249,55 @@ func (a *app) mutate(fn func(tx *store.Tx, caller Caller) (any, error)) (any, er
 	if err != nil {
 		return nil, err
 	}
-	digest := sha256.New()
-	json.NewEncoder(digest).Encode(a.req.Argv)
-	digest.Write(a.stdin)
-	return db.Mutate(a.ctx, caller.Scope(), a.req.Key, hex.EncodeToString(digest.Sum(nil)), func(tx *store.Tx) (any, error) {
+	if err := a.requireCurrentRun(caller, strings.Join(a.req.Argv, " ")); err != nil {
+		return nil, err
+	}
+	return db.Mutate(a.ctx, caller.Scope(), a.req.Key, a.digest(), func(tx *store.Tx) (any, error) {
+		if caller.Kind == "run" {
+			if err := coord.RequireCurrent(tx, caller); err != nil {
+				return nil, err
+			}
+		}
 		return fn(tx, caller)
 	})
+}
+
+// once makes a command with external effects idempotent by key: a repeat
+// returns the first success's result instead of acting again.
+func (a *app) once(fn func(caller Caller) (any, error)) (any, error) {
+	caller, err := a.identity()
+	if err != nil {
+		return nil, err
+	}
+	db, err := a.store()
+	if err != nil {
+		return nil, err
+	}
+	if err := a.requireCurrentRun(caller, strings.Join(a.req.Argv, " ")); err != nil {
+		return nil, err
+	}
+	digest := a.digest()
+	var storedDigest, stored string
+	err = db.QueryRowContext(a.ctx, `SELECT digest, result FROM idempotency WHERE caller = ? AND key = ?`, caller.Scope(), a.req.Key).Scan(&storedDigest, &stored)
+	switch {
+	case err == nil && storedDigest == digest:
+		return json.RawMessage(stored), nil
+	case err == nil:
+		return nil, fault.New("key_conflict", "key %q was already used for a different request", a.req.Key)
+	case !errors.Is(err, sql.ErrNoRows):
+		return nil, err
+	}
+	result, err := fn(caller)
+	if err != nil {
+		return nil, err
+	}
+	out, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	_, err = db.ExecContext(a.ctx, `INSERT OR IGNORE INTO idempotency (caller, key, digest, result, time) VALUES (?, ?, ?, ?, ?)`,
+		caller.Scope(), a.req.Key, digest, string(out), store.Timestamp(time.Now()))
+	return json.RawMessage(out), err
 }
 
 func (a *app) text(field, value string, limit int) (string, error) {

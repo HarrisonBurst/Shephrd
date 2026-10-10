@@ -176,6 +176,11 @@ func (s *Store) TaskEvents(ctx context.Context, task int64, limit int) ([]Event,
 	return events, err
 }
 
+// EventsWhere reads events matching a condition on the events table.
+func (s *Store) EventsWhere(ctx context.Context, where string, args ...any) ([]Event, error) {
+	return s.events(ctx, where, args...)
+}
+
 func (s *Store) events(ctx context.Context, where string, args ...any) ([]Event, error) {
 	rows, err := s.QueryContext(ctx, `SELECT seq, name, time, COALESCE(task, 0), COALESCE(attempt, 0), COALESCE(run, 0), caller, data
 		FROM events `+where, args...)

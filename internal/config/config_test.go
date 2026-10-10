@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"shephrd/internal/fault"
 )
@@ -33,6 +34,16 @@ func TestDefaults(t *testing.T) {
 	}
 	if cfg.MaxDepth != 3 || filepath.Base(cfg.Store) != "shephrd.db" || !filepath.IsAbs(cfg.DataDir) {
 		t.Fatalf("defaults: %+v", cfg)
+	}
+}
+
+func TestTimeouts(t *testing.T) {
+	cfg, err := load(t, "host = \"workhorse\"\n[timeouts]\nturn_budget = \"1ms\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Timeouts.TurnBudget.Duration != time.Millisecond || cfg.Timeouts.Inactivity.Duration != 30*time.Minute || cfg.Timeouts.Settle.Duration != 5*time.Second {
+		t.Fatalf("timeouts: %+v", cfg.Timeouts)
 	}
 }
 

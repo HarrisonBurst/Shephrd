@@ -160,7 +160,7 @@ Each command's behavior is defined by the spec named in its row.
 | `<plugin-name> ...` | Subcommands added by plugins | [Plugins](extensibility.md) |
 | `skill main`, `skill subdriver`, `skill worker` | Print a role's guidance | [Guidance](skill.md) |
 
-`help` prints text help for any command. `agent` and `_run` are private commands between Shephrd binaries of the same release, not part of this surface.
+`help` prints text help for any command. `agent`, `_run`, `_started` and `_exited` are private commands between Shephrd binaries of the same release, not part of this surface.
 
 That is 44 leaf commands, against 68 today. Each role uses far fewer:
 
