@@ -43,6 +43,7 @@ Every report is recorded on the reporting task. Whether it also needs someone's 
 |---|---|
 | `question`, `result`, `blocker` | Yes |
 | The task becoming `held` for any other reason, such as `no_report`, `inactive` or a lost run | Yes |
+| A [`dependency.changed`](artifacts.md#stacking) event for a task built on changed work | Yes |
 | `progress`, `note` | No. Visible in `task show` and the event stream. |
 
 Where the wake goes depends on who the owner is:

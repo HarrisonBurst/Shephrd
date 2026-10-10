@@ -70,13 +70,18 @@ A sub-driver is a `driver` task. There are no separate sub-driver records or com
 
 ### Dependencies
 
-A task may wait on sibling tasks under the same owner until each is **delivered**: closed with its deliverable in final form, such as an accepted report or landed code. Artifacts and authority define what delivered means for each deliverable. The graph is acyclic. A queued task is **ready** when every dependency is delivered, and a dependency that closed any other way is reported as never satisfiable.
+A task may wait on sibling tasks under the same owner. Each dependency waits for one of two [milestones](artifacts.md#milestones):
 
-There is no stacking. A dependent task never starts before its dependencies are delivered, so a code task always starts from a base that already contains the code it depended on. Only tasks with no dependency between them run in parallel.
+- **Published**, the default: the dependency's work is finished and available. A report or answer has been accepted, code in a `direct` repository is merged, and code in a `pull_request` repository has an open pull request.
+- **Merged**, with `--until merged`: the dependency is delivered. For code, it is on the default branch.
+
+The graph is acyclic. A queued task is **ready** when every dependency has reached its milestone, and a dependency that closed any other way is reported as never satisfiable.
+
+A task never starts before its dependencies' work is finished. Only tasks with no dependency between them run in parallel. A task that depends on published but unmerged code [stacks](artifacts.md#stacking) on it: it starts from the dependency's branch, and its owner is told with a `dependency.changed` event if that dependency later changes.
 
 Dependencies never cross owners. Ordering between subtrees, such as work in two repositories, is expressed one level up, between the driver tasks that own them.
 
-When a task starts, the delivered results of its dependencies are pinned into that attempt's inputs. Later retries of a dependency never change inputs already pinned. This replaces plans: decomposition is a set of sibling tasks with dependencies, created by whichever driver decomposes the work.
+When a task starts, the results of its dependencies at their milestone are pinned into that attempt's inputs. Later retries of a dependency never change inputs already pinned. This replaces plans: decomposition is a set of sibling tasks with dependencies, created by whichever driver decomposes the work.
 
 ### Attempt
 
@@ -214,5 +219,5 @@ Plugins never change ownership, state, attempts or runs except through ordinary 
 
 1. **Sub-drivers are reused.** The default skill has the main driver reuse an open sub-driver for the same repository when one exists. A message reopens a done driver task, so this needs no extra mechanism.
 2. **Depth limit** defaults to 3 levels below a root, enough for a nested sub-driver over workers.
-3. **One dependency kind: delivered.** No stacking, and dependencies only between siblings.
+3. **Dependencies wait for published work by default, or merged with `--until merged`.** Never before the dependency's work is finished, stacking on unmerged code in `pull_request` repositories, and only between siblings.
 4. **Results are per request.** A reused sub-driver returns each request's result as soon as it is ready. Results do not require closed children; only closing the task does.

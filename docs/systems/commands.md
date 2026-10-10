@@ -148,7 +148,9 @@ Provisional. Rows owned by later specs are placeholders for those specs to final
 | `task data set` | Write the caller's plugin data namespace on a task | Coordination |
 | `report progress`, `question`, `result`, `blocker`, `note` | A run reports on its task | Notification |
 | `inbox`, `inbox wait`, `inbox ack` | A driver reads, waits for and acknowledges items needing attention | Notification |
-| `task land`, `task discard`, `grant` | Irreversible actions and their authority | Artifacts and authority |
+| `task deliver`, `task verify`, `task discard` | Accept or land a result, re-check landing proof, discard work | Artifacts and authority |
+| `grant`, `grant revoke` | Delegate or revoke `land` and `discard` authority | Artifacts and authority |
+| `artifact show`, `artifact read` | Read an artifact's metadata or bytes | Artifacts and authority |
 | `workspace reconcile` | Classify interrupted effects on every host | Session execution |
 | `host list` | Hosts with reachability, version and installed providers | Session execution |
 | `events` | Read or follow the public event stream from a cursor | Plugins and extensibility |

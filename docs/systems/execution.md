@@ -42,7 +42,7 @@ sequenceDiagram
 Every attempt of a task with a repository gets one git worktree of that repository, on the repository's host. That includes sub-driver tasks, which then read and investigate in isolation. A driver task without a repository gets an empty scratch directory.
 
 - **Branch:** `shephrd/<task>/<attempt>`. Branches are never deleted.
-- **Base:** the registered default branch, fetched from its remote when the attempt is created and recorded as an exact commit. Without a remote, the local default branch is used. If the local and fetched branches have diverged, creation is refused rather than guessing. Coordination guarantees dependencies are delivered first, so the base already contains them.
+- **Base:** the registered default branch, fetched from its remote when the attempt is created and recorded as an exact commit. Without a remote, the local default branch is used. If the local and fetched branches have diverged, creation is refused rather than guessing. Coordination guarantees dependencies are finished first, so the base already contains merged ones. A task that [stacks](artifacts.md#stacking) on published but unmerged code starts from that dependency's sealed commit instead.
 - **Intent first:** execution records the intended path and branch before creating anything, then verifies the path, branch, common git directory and base commit before marking the workspace `held`.
 - **Setup:** the repository's registered setup command runs once in a new workspace. It is trusted code chosen by the operator at registration.
 - **The registered checkout is never modified.** Execution only fetches into it, and never copies its uncommitted or ignored files.
@@ -61,7 +61,7 @@ stateDiagram-v2
     releasing --> unknown: ambiguous result
 ```
 
-Resume reuses the attempt's held workspace exactly, with no re-fetch, reset or rerun of setup. Retry creates a new attempt and a new workspace from a fresh base, and never copies anything from the old one. Removal happens only when [artifacts and authority](../design.md#system-responsibilities) authorizes it, after execution verifies exact identity, no live process and, unless discarding, a clean tree. An `unknown` workspace is never removed automatically.
+Resume reuses the attempt's held workspace exactly, with no re-fetch, reset or rerun of setup. Retry creates a new attempt and a new workspace from a fresh base, and never copies anything from the old one. Removal happens only when [artifacts and authority](artifacts.md#discard-and-release) authorizes it, after execution verifies exact identity, no live process and, unless discarding, a clean tree. An `unknown` workspace is never removed automatically.
 
 ## Sessions
 
@@ -70,7 +70,7 @@ A run is one turn of one session. It starts, works until it reports a result, qu
 ### Starting a run
 
 1. Coordination reserves the run generation and token.
-2. Execution writes the **brief** into the workspace: role, title, objective, acceptance, pinned inputs, the latest notes, and for a driver task an overview of every open request with its children and the events since its last turn, plus a pointer to the repository's context file, and how to report. Each brief is bounded in size, and longer material is referenced by commands to read it rather than included.
+2. Execution writes the **brief** into the workspace: role, title, objective, acceptance, the paths of [pinned inputs](artifacts.md#passing-artifacts-on), the latest notes, and for a driver task an overview of every open request with its children and the events since its last turn, plus a pointer to the repository's context file, and how to report. Each brief is bounded in size, and longer material is referenced by commands to read it rather than included.
 3. The host agent starts `shephrd _run`, the **supervisor**, inside the chosen presentation. The supervisor starts the harness in its own process group with a clean environment: `PATH`, `HOME`, the host's `SHEPHRD_CONFIG` and `SHEPHRD_RUN_TOKEN`. Driver identity, terminal credentials and any parent Shephrd tokens are never passed through.
 4. Process identity, meaning process ID with start time, and any presentation endpoint are recorded before the harness receives the brief.
 
