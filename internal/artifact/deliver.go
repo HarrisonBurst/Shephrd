@@ -11,18 +11,21 @@ import (
 )
 
 type Service struct {
-	DB   *store.Store
-	Cfg  *config.Config
-	Host func(string) (execution.Host, error)
+	DB    *store.Store
+	Cfg   *config.Config
+	Host  func(string) (execution.Host, error)
+	Forge func(ctx context.Context, provider string, req ForgeRequest) (ForgeResponse, error)
 }
 
 type Delivered struct {
-	Task     *coord.Task       `json:"task"`
-	Artifact *Artifact         `json:"artifact,omitempty"`
-	Landing  *execution.Landed `json:"landing,omitempty"`
-	Released []string          `json:"released"`
-	Retained []string          `json:"retained"`
-	Warnings []string          `json:"-"`
+	Task        *coord.Task       `json:"task"`
+	Artifact    *Artifact         `json:"artifact,omitempty"`
+	Landing     *execution.Landed `json:"landing,omitempty"`
+	PullRequest *PullRequest      `json:"pull_request,omitempty"`
+	Pending     string            `json:"pending,omitempty"`
+	Released    []string          `json:"released"`
+	Retained    []string          `json:"retained"`
+	Warnings    []string          `json:"-"`
 }
 
 func (s *Service) repo(t *coord.Task) (path, branch string, host execution.Host, err error) {
@@ -72,8 +75,8 @@ func (s *Service) Deliver(ctx context.Context, c coord.Caller, t *coord.Task) (*
 	if landing.Mode == "" {
 		return nil, fault.New("landing_not_configured", "repository %s has no landing mode; set [repos.%s.landing] in the home host's configuration", t.Repo, t.Repo)
 	}
-	if landing.Mode != "direct" {
-		return nil, fault.New("landing_not_configured", "landing mode %s needs its forge provider", landing.Mode)
+	if landing.Mode == "pull_request" {
+		return s.deliverPullRequest(ctx, c, t, art, landing, grant)
 	}
 	repo, branch, host, err := s.repo(t)
 	if err != nil {
@@ -241,6 +244,14 @@ func (s *Service) Verify(ctx context.Context, c coord.Caller, t *coord.Task) (*D
 		return nil, err
 	}
 	if !proof.Proven {
+		landing := s.Cfg.Repos[t.Repo].Landing
+		ref, url, err := pullRequest(s.DB, t.ID)
+		if err != nil {
+			return nil, err
+		}
+		if landing.Mode == "pull_request" && ref != "" {
+			return s.provePullRequest(ctx, c, t, art, landing, &PullRequest{Ref: ref, URL: url}, !coord.Owns(c, t))
+		}
 		return nil, fault.New("not_proven", "%s is not on %s yet", art.Commit, branch).WithNext("task", "verify", t.Ref)
 	}
 	err = s.DB.Write(ctx, func(tx *store.Tx) error {

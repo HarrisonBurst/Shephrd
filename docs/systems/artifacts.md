@@ -92,7 +92,7 @@ merge = "external"
 | Mode | `task deliver` does | Merged when |
 |---|---|---|
 | `direct` | Merges the sealed commit into the default branch in a temporary worktree, fast-forward-only or with a merge commit, and pushes it. Without a remote, it updates the local default branch. | Immediately |
-| `pull_request`, `merge = "shephrd"` | Pushes the branch and opens a pull request through the forge provider, then merges it once the forge reports it mergeable, for example after checks pass | Shephrd merges it |
+| `pull_request`, `merge = "shephrd"` | Pushes the branch from the repository's host and opens a pull request through the forge provider, then merges it once the forge reports it mergeable, for example after checks pass. While checks are pending the task stays published; running `task deliver` again merges it. | Shephrd merges it |
 | `pull_request`, `merge = "external"` | Pushes the branch and opens a pull request | Someone merges it on the forge |
 
 - Landing never touches the registered checkout.
@@ -207,7 +207,7 @@ The `report.result` gate in [notification and result flow](notifications.md#inte
 
 | Type | Request | Response | Built-in |
 |---|---|---|---|
-| `forge` | Operation `publish` (push and open a pull request against a target branch), `merge`, `observe` (whether and how a pull request merged) or `retarget`, with repository, branch, sealed commit and task summary | Pull request reference, merge commit, or `failed` with a reason | None; `direct` mode needs no provider |
+| `forge` | Operation `publish` (open, or find, the pull request for a branch Shephrd already pushed, against a target branch), `merge`, `observe` (whether and how a pull request merged) or `retarget`, with repository and its remote, branch, sealed commit and task summary | Outcome `ok`, `pending` or `failed` with a reason; pull request reference, state, head and merge commit | None; `direct` mode needs no provider. The first-party `github` plugin uses the `gh` CLI |
 
 ### Limits
 

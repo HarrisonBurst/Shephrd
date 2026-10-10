@@ -147,6 +147,9 @@ func taskShow(a *app) *cobra.Command {
 				return nil, err
 			}
 		}
+		if out["landings"], err = artifact.Landings(db, t.ID); err != nil {
+			return nil, err
+		}
 		if t.State == "queued" {
 			out["ready"] = ready
 		}
