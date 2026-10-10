@@ -9,6 +9,58 @@ CREATE TABLE repos (
     UNIQUE (host, path)
 );
 
+CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY,
+    parent INTEGER REFERENCES tasks(id),
+    driver TEXT,
+    root INTEGER NOT NULL,
+    depth INTEGER NOT NULL,
+    request INTEGER,
+    role TEXT NOT NULL CHECK (role IN ('worker', 'driver')),
+    repo INTEGER REFERENCES repos(id),
+    title TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    acceptance TEXT NOT NULL,
+    deliverable TEXT NOT NULL CHECK (deliverable IN ('code', 'report', 'answer')),
+    host TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    model TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'waiting', 'held', 'done', 'closed')),
+    reason TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    milestone TEXT NOT NULL CHECK (milestone IN ('', 'published', 'merged')),
+    wake_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK ((parent IS NULL) <> (driver IS NULL))
+);
+
+CREATE INDEX tasks_parent ON tasks (parent);
+CREATE INDEX tasks_driver ON tasks (driver);
+
+CREATE TABLE dependencies (
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    dependency INTEGER NOT NULL REFERENCES tasks(id),
+    until TEXT NOT NULL CHECK (until IN ('published', 'merged')),
+    PRIMARY KEY (task, dependency)
+);
+
+CREATE TABLE requests (
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    seq INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('open', 'asked', 'answered')),
+    result INTEGER,
+    PRIMARY KEY (task, seq)
+);
+
+CREATE TABLE plugin_data (
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    plugin TEXT NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (task, plugin)
+);
+
 CREATE TABLE events (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

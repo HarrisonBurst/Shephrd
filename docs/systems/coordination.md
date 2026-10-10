@@ -36,7 +36,8 @@ Every task has exactly one owner, fixed by the tree: a driver for a root task, o
 - An owner may act on the tasks it directly owns. A run acts as its task: it reports on that task and, for a driver task, acts on its children.
 - Any caller may read its own subtree. A driver reads its roots and all their descendants.
 - Ancestors above the owner can read but not act, except for a tree-wide stop. The main driver does not supervise grandchildren.
-- Only a root task can change owner, by explicit adoption from one driver to another. Child tasks never change owner.
+- Only a root task can change owner, by explicit adoption from one driver to another: its current owner hands it over with `task adopt --to`, or the operator moves it. Child tasks never change owner.
+- A child stays in its parent's repository. A general sub-driver, with no repository, delegates only to general driver tasks.
 
 ### Repository
 
@@ -64,7 +65,7 @@ One delegated outcome. Fields:
 A sub-driver is a `driver` task. There are no separate sub-driver records or commands.
 
 - **Every `message` to a driver task is a request.** Creating a driver task makes its objective the first request, and the owner adds more by sending messages, which is how one sub-driver is reused for several pieces of work.
-- **Children belong to a request.** A child created by a driver run records the request it serves.
+- **Children belong to a request.** A child created by a driver run records the request it serves: the only open one, or the one named with `--request` when several are open.
 - **Results answer requests.** A driver run reports a `result` or `question` for one request, referencing it, whenever that request is ready. One request's result never waits on another's work.
 - **Results carry evidence of their children.** Coordination attaches the current state of the request's children to each result, so the owner sees anything still running or awaiting landing. That state is evidence; it requires nothing.
 

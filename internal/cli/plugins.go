@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"shephrd/internal/coord"
 	"shephrd/internal/fault"
 	"shephrd/internal/plugin"
 	"shephrd/internal/store"
@@ -233,10 +234,25 @@ func (a *app) visibleEvents(db *store.Store, caller Caller, after int64, limit i
 		return events, err
 	}
 	visible := events[:0]
+	readable := map[int64]bool{}
 	for _, event := range events {
-		if event.TaskID == 0 {
-			visible = append(visible, event)
+		if event.TaskID != 0 {
+			ok, seen := readable[event.TaskID]
+			if !seen {
+				t, err := coord.Load(db, event.TaskID)
+				if err != nil {
+					return nil, err
+				}
+				if ok, err = coord.CanRead(db, caller, t); err != nil {
+					return nil, err
+				}
+				readable[event.TaskID] = ok
+			}
+			if !ok {
+				continue
+			}
 		}
+		visible = append(visible, event)
 	}
 	return visible, nil
 }
