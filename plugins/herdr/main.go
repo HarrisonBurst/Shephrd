@@ -1,5 +1,5 @@
 // Command shephrd-herdr is a Shephrd presentation provider: it runs each
-// task's sessions in one Herdr tab, reused across the task's turns.
+// task's turns in separate Herdr tabs.
 // Shephrd still owns the process; Herdr only shows it.
 package main
 
@@ -23,7 +23,6 @@ type request struct {
 		Command   string `json:"command"`
 		Workspace string `json:"workspace"`
 		Endpoint  string `json:"endpoint"`
-		Reuse     string `json:"reuse"`
 	} `json:"body"`
 }
 
@@ -135,15 +134,6 @@ func handle(req request) (map[string]string, error) {
 	}
 	switch req.Body.Operation {
 	case "open":
-		var previous endpoint
-		if json.Unmarshal([]byte(req.Body.Reuse), &previous) == nil && previous.Pane != "" {
-			if _, _, err := herdr("pane", "get", previous.Pane); err == nil {
-				herdr("tab", "rename", previous.Tab, req.Body.Title)
-				if _, _, err := herdr("pane", "run", previous.Pane, req.Body.Command); err == nil {
-					return map[string]string{"endpoint": req.Body.Reuse}, nil
-				}
-			}
-		}
 		id, err := workspaceID()
 		if err != nil {
 			return nil, err
@@ -167,28 +157,39 @@ func handle(req request) (map[string]string, error) {
 		}
 		at = endpoint{Tab: created.Result.Tab.ID, Pane: created.Result.RootPane.ID}
 		if _, _, err := herdr("pane", "run", at.Pane, req.Body.Command); err != nil {
-			herdr("pane", "close", at.Pane)
 			return nil, err
 		}
 		encoded, _ := json.Marshal(at)
 		return map[string]string{"endpoint": string(encoded)}, nil
 	case "probe":
-		_, code, err := herdr("pane", "get", at.Pane)
-		switch {
-		case err == nil:
-			return map[string]string{"state": "present"}, nil
-		case strings.HasSuffix(code, "_not_found"):
-			return map[string]string{"state": "absent"}, nil
-		}
-		return map[string]string{"state": "uncertain"}, nil
-	case "close":
-		if _, code, err := herdr("pane", "close", at.Pane); err != nil && !strings.HasSuffix(code, "_not_found") {
-			return nil, err
-		}
-		return map[string]string{}, nil
+		return map[string]string{"state": paneState(at)}, nil
 	case "focus":
 		_, _, err := herdr("tab", "focus", at.Tab)
 		return map[string]string{}, err
 	}
 	return nil, fmt.Errorf("unknown presentation operation %q", req.Body.Operation)
+}
+
+func paneState(at endpoint) string {
+	if at.Tab == "" || at.Pane == "" {
+		return "uncertain"
+	}
+	out, code, err := herdr("pane", "get", at.Pane)
+	switch {
+	case err == nil:
+		var found struct {
+			Result struct {
+				Pane struct {
+					Tab  string `json:"tab_id"`
+					Pane string `json:"pane_id"`
+				} `json:"pane"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(out, &found) == nil && found.Result.Pane.Pane == at.Pane && found.Result.Pane.Tab == at.Tab && at.Tab != "" {
+			return "present"
+		}
+	case strings.HasSuffix(code, "_not_found"):
+		return "absent"
+	}
+	return "uncertain"
 }

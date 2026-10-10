@@ -115,6 +115,7 @@ func TestWorkerQuestionWaits(t *testing.T) {
 
 func TestRunWithoutReportGetsOneNudgeThenIsHeld(t *testing.T) {
 	env, _ := withHarness(t)
+	env.StartDaemon()
 	env.Script(map[string][][]action{"t_1": {{}, {}}})
 	env.OK("task", "create", "--repo", "api", "--objective", "Work")
 	env.OK("task", "start", "t_1")
@@ -134,8 +135,25 @@ func TestRunWithoutReportGetsOneNudgeThenIsHeld(t *testing.T) {
 	}
 }
 
+func TestReconcileDoesNotStartTheNoReportNudge(t *testing.T) {
+	env, _ := withHarness(t)
+	env.Script(map[string][][]action{"t_1": {{}, {{"work": "Fix"}, {"report": []string{"result", "Done"}}}}})
+	env.OK("task", "create", "--repo", "api", "--objective", "Work")
+	env.OK("task", "start", "t_1")
+	env.Eventually("the exited run to reconcile", func() bool {
+		env.OK("workspace", "reconcile")
+		return env.OK("task", "log", "t_1")["run"].(map[string]any)["liveness"] == "exited"
+	})
+	if calls := callsFor(env, "t_1", 1); len(calls) != 0 {
+		t.Fatalf("reconciliation started a continuation: %v", calls)
+	}
+	env.StartDaemon()
+	env.WaitState("t_1", "done")
+}
+
 func TestNudgedRunCanStillFinish(t *testing.T) {
 	env, _ := withHarness(t)
+	env.StartDaemon()
 	env.Script(map[string][][]action{"t_1": {{}, {{"work": "Fix"}, {"report": []string{"result", "Done after the nudge"}}}}})
 	env.OK("task", "create", "--repo", "api", "--objective", "Work")
 	env.OK("task", "start", "t_1")

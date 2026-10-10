@@ -1,5 +1,5 @@
 // Command shephrd-cmux is a Shephrd presentation provider: it runs each
-// task's sessions in one cmux workspace, reused across the task's turns.
+// task's turns in separate cmux workspaces.
 // Shephrd still owns the process; cmux only shows it.
 package main
 
@@ -23,7 +23,6 @@ type request struct {
 		Command   string `json:"command"`
 		Workspace string `json:"workspace"`
 		Endpoint  string `json:"endpoint"`
-		Reuse     string `json:"reuse"`
 	} `json:"body"`
 }
 
@@ -82,15 +81,6 @@ func handle(req request) (map[string]string, error) {
 	}
 	switch req.Body.Operation {
 	case "open":
-		var previous endpoint
-		if json.Unmarshal([]byte(req.Body.Reuse), &previous) == nil && previous.Workspace != "" {
-			if out, err := cmux("tree", "--workspace", previous.Workspace, "--window", previous.Window); err == nil && strings.Contains(string(out), previous.Surface) {
-				cmux("workspace", "rename", previous.Workspace, "--title", req.Body.Title, "--window", previous.Window)
-				if run(previous, req.Body.Command) == nil {
-					return map[string]string{"endpoint": req.Body.Reuse}, nil
-				}
-			}
-		}
 		out, err := cmux("workspace", "create", "--name", req.Body.Title, "--cwd", req.Body.Workspace, "--window", window, "--focus", "false")
 		if err != nil {
 			return nil, err
@@ -99,33 +89,64 @@ func handle(req request) (map[string]string, error) {
 			return nil, fmt.Errorf("cmux workspace create returned no surface: %s", out)
 		}
 		if err := run(at, req.Body.Command); err != nil {
-			cmux("workspace", "close", at.Workspace, "--window", at.Window)
 			return nil, err
 		}
 		encoded, _ := json.Marshal(at)
 		return map[string]string{"endpoint": string(encoded)}, nil
 	case "probe":
-		out, err := cmux("tree", "--workspace", at.Workspace, "--window", at.Window)
-		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "not found") {
-				return map[string]string{"state": "absent"}, nil
-			}
-			return map[string]string{"state": "uncertain"}, nil
-		}
-		if strings.Contains(string(out), at.Workspace) {
-			return map[string]string{"state": "present"}, nil
-		}
-		return map[string]string{"state": "absent"}, nil
-	case "close":
-		if _, err := cmux("workspace", "close", at.Workspace, "--window", at.Window); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
-			return nil, err
-		}
-		return map[string]string{}, nil
+		return map[string]string{"state": workspaceState(at)}, nil
 	case "focus":
 		_, err := cmux("workspace", "select", at.Workspace, "--window", at.Window)
 		return map[string]string{}, err
 	}
 	return nil, fmt.Errorf("unknown presentation operation %q", req.Body.Operation)
+}
+
+func workspaceState(at endpoint) string {
+	if at.Window == "" || at.Workspace == "" || at.Surface == "" {
+		return "uncertain"
+	}
+	out, err := cmux("tree", "--workspace", at.Workspace, "--window", at.Window)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			return "absent"
+		}
+		return "uncertain"
+	}
+	var tree struct {
+		Windows []struct {
+			ID         string `json:"id"`
+			Workspaces []struct {
+				ID    string `json:"id"`
+				Panes []struct {
+					Surfaces []struct {
+						ID string `json:"id"`
+					} `json:"surfaces"`
+				} `json:"panes"`
+			} `json:"workspaces"`
+		} `json:"windows"`
+	}
+	if json.Unmarshal(out, &tree) != nil {
+		return "uncertain"
+	}
+	for _, win := range tree.Windows {
+		if win.ID != at.Window {
+			continue
+		}
+		for _, ws := range win.Workspaces {
+			if ws.ID != at.Workspace {
+				continue
+			}
+			for _, pane := range ws.Panes {
+				for _, surface := range pane.Surfaces {
+					if surface.ID == at.Surface {
+						return "present"
+					}
+				}
+			}
+		}
+	}
+	return "uncertain"
 }
 
 // run types a command into a surface's shell and presses enter.

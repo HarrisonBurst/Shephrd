@@ -301,6 +301,7 @@ func (e *Env) WaitState(ref, state string) map[string]any {
 	e.t.Helper()
 	var task map[string]any
 	e.Eventually(ref+" "+state, func() bool {
+		e.Run("", "workspace", "reconcile")
 		shown := e.Run("", "task", "show", ref)
 		if shown.Code != 0 {
 			return false

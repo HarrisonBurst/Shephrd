@@ -268,6 +268,7 @@ func privateRunCommands(a *app) []*cobra.Command {
 		if err != nil {
 			return nil, err
 		}
+		refused := false
 		err = db.Write(a.ctx, func(tx *store.Tx) error {
 			if err := coord.RequireCurrent(tx, caller); err != nil {
 				return err
@@ -276,42 +277,21 @@ func privateRunCommands(a *app) []*cobra.Command {
 			if err != nil {
 				return err
 			}
-			a, err := coord.LoadAttempt(tx, r.Task, r.Attempt)
+			if r.StopReason != "" || r.Liveness == "unknown" {
+				refused = true
+				_, err := tx.Exec(`UPDATE runs SET pid = ?, start_time = ? WHERE id = ? AND (pid IS NULL OR pid = 0)`, pid, start, r.ID)
+				return err
+			}
+			attempt, err := coord.LoadAttempt(tx, r.Task, r.Attempt)
 			if err != nil {
 				return err
 			}
-			return coord.MarkLive(tx, r, pid, start, "", a.Harness, a.Model)
+			return coord.MarkLive(tx, r, pid, start, "", attempt.Harness, attempt.Model)
 		})
+		if err == nil && refused {
+			err = fault.New("run_stopped", "run %d was stopped before its supervisor started", caller.Run)
+		}
 		return map[string]any{"run": caller.Run}, err
-	})
-	var status int
-	var session string
-	exited := &cobra.Command{Use: "_exited", Hidden: true, Args: cobra.NoArgs}
-	exited.Flags().IntVar(&status, "status", 0, "")
-	exited.Flags().StringVar(&session, "session", "", "")
-	exited.RunE = a.run(func(*cobra.Command, []string) (any, error) {
-		caller, err := a.identity()
-		if err != nil {
-			return nil, err
-		}
-		if caller.Kind != "run" {
-			return nil, fault.New("not_a_run", "only a supervisor records its run's exit")
-		}
-		x, err := a.executor()
-		if err != nil {
-			return nil, err
-		}
-		if err := x.Exited(a.ctx, caller.Run, status, session); err != nil {
-			return nil, err
-		}
-		if r, err := coord.LoadRun(x.DB, caller.Run); err == nil {
-			if t, err := coord.Load(x.DB, r.Task); err == nil && t.State == "closed" {
-				if s, err := a.artifacts(); err == nil {
-					s.Release(a.ctx, t.ID, false)
-				}
-			}
-		}
-		return map[string]any{"run": caller.Run}, nil
 	})
 	turn := &cobra.Command{Use: "_turn", Hidden: true, Args: cobra.NoArgs}
 	turn.RunE = a.run(func(*cobra.Command, []string) (any, error) {
@@ -335,7 +315,7 @@ func privateRunCommands(a *app) []*cobra.Command {
 		}
 		return map[string]any{"ended": r.TurnReported}, nil
 	})
-	return []*cobra.Command{started, exited, turn}
+	return []*cobra.Command{started, turn}
 }
 
 func workspaceCommand(a *app) *cobra.Command {
@@ -356,7 +336,31 @@ func workspaceCommand(a *app) *cobra.Command {
 			if err != nil {
 				return nil, err
 			}
-			return x.Reconcile(a.ctx)
+			out, err := x.Reconcile(a.ctx)
+			if err != nil {
+				return nil, err
+			}
+			for _, run := range out.Runs {
+				if run["liveness"] != "exited" {
+					continue
+				}
+				id, err := coord.ParseTaskRef(run["task"])
+				if err != nil {
+					return nil, err
+				}
+				t, err := coord.Load(x.DB, id)
+				if err != nil || t.State != "closed" {
+					continue
+				}
+				s, err := a.artifacts()
+				if err != nil {
+					return nil, err
+				}
+				if _, _, err := s.Release(a.ctx, id, false); err != nil {
+					return nil, err
+				}
+			}
+			return out, nil
 		}),
 	})
 	return cmd
