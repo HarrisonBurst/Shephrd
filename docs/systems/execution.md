@@ -192,7 +192,7 @@ None of its own. Coordination's `task.start` gate runs before every run starts, 
 | `harness` | Mode (new or resume), read-only flag, brief path and text, workspace, model, native session ID when resuming | Command, extra environment, and the native session ID it assigned, if it supports resume | Claude Code, Codex, Pi |
 | `presentation` | Operation: open, probe, close, focus. For open: title, command, workspace | Endpoint identity; probe answers `present`, `absent` or `uncertain` | Headless |
 
-A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor inside a terminal it creates, and only an exact `absent` answer counts as the endpoint being gone.
+A harness provider only builds the command. The supervisor runs it, so the provider never owns process identity. A presentation provider such as Herdr or cmux runs the supervisor inside a terminal it creates, and only an exact `absent` answer counts as the endpoint being gone. A host names its presentation with `presentation` in its own configuration. With a terminal presentation, the run token reaches the supervisor through a private file in the run directory that the supervisor removes, never through a command line or a terminal's environment, and the supervisor records its own process identity once it starts.
 
 ### Limits
 

@@ -2,6 +2,18 @@
 
 **Status:** approved. Builds the [system design](design.md) and its [system specs](design.md#left-to-component-specs).
 
+## Progress
+
+Milestones M1 to M9 are built and merged, each as its own pull request with end-to-end tests against the built binary. The [getting started guide](getting-started.md) describes the result.
+
+Remaining work, none of it blocking use on one machine:
+
+- **Session rotation on a full context** is not implemented. Without output parsing a harness has no way to say its context is nearly full, so a sub-driver session rotates only when a task is retried. The checkpoint note every driver turn ends with is already in each brief.
+- **Live validation.** The three-machine setup is tested with a fake `ssh` and separate homes on one machine, the Herdr presentation with a fake `herdr`, the cmux presentation not at all, and the GitHub plugin with a fake `gh`. None has run against a real second machine, Herdr, cmux or GitHub. Opt-in live tests are not written yet.
+- **Forge webhooks.** Nothing receives GitHub webhooks yet, so a merge made on GitHub is proven when someone runs `shephrd task verify`. A plugin that receives the webhook and runs it would close the loop.
+- **Presentation focus** is part of the provider contract but no command uses it.
+- **A sub-driver's report deliverable** is its result text, since its workspace is read-only; the reports its workers wrote are attached as their artifacts.
+
 ## Context
 
 The minimal redesign is approved: the [system design](design.md) plus seven system specs in `docs/systems/`. The current code (about 40k LOC across `store`, `control`, `cli`, `runner`, wake and bridge packages, plus a Pi extension) implements the old design and has no place in the new one. The decision is to delete it and build the new core from empty, lifting a few self-contained mechanisms from git history. This plan orders that build so a working local vertical slice exists early and every later system lands on it.

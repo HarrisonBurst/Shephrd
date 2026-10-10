@@ -44,6 +44,8 @@ Every report is recorded on the reporting task. Whether it also needs someone's 
 | `question`, `result`, `blocker` | Yes |
 | The task becoming `held` for any other reason, such as `no_report`, `inactive` or a lost run | Yes |
 | A [`dependency.changed`](artifacts.md#stacking) event for a task built on changed work | Yes |
+| A queued child becoming ready because work it waits on reached its milestone through someone else, such as a merge proven by `task verify` | Yes |
+| A closed task's workspace kept because it has uncommitted changes | Yes |
 | `progress`, `note` | No. Visible in `task show` and the event stream. |
 
 Where the wake goes depends on who the owner is:
@@ -143,7 +145,7 @@ Reports themselves are coordination's `task.progress`, `task.question`, `task.re
 |---|---|---|---|
 | `delivery` | Driver, item, task summary, event body, and exact commands to read, reply and acknowledge | `delivered`, `retryable` or `rejected`, with a bounded detail | Webhook, signed, with a stable delivery ID per item for deduplication |
 
-Delivery into a Pi session is a first-party plugin. Desktop notifications are an event subscriber, not a delivery provider.
+Delivery into a Pi session is a first-party Pi extension that holds `inbox wait` and acknowledges each item after the turn that handled it. Desktop notifications are an event subscriber, the first-party `macos-notify` plugin, not a delivery provider.
 
 ### Limits
 

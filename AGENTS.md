@@ -20,6 +20,7 @@ Run the focused tests for the changed package first. Before delivery, run:
 ```sh
 make test
 make test-docs
+make test-extension
 go vet ./...
 git diff --check
 ```

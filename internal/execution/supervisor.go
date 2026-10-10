@@ -86,7 +86,14 @@ func Supervise(runDir string) int {
 		fmt.Fprintln(os.Stderr, "decode run.json:", err)
 		return 1
 	}
+	syscall.Setpgid(0, 0)
 	token := os.Getenv("SHEPHRD_RUN_TOKEN")
+	if token == "" {
+		if token, err = readToken(runDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 	self, err := proc.Of(os.Getpid())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "identify supervisor:", err)

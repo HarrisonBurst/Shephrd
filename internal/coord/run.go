@@ -39,6 +39,7 @@ type Run struct {
 	Dir          string `json:"dir"`
 	PID          int    `json:"pid,omitempty"`
 	Start        string `json:"-"`
+	Endpoint     string `json:"endpoint,omitempty"`
 	Liveness     string `json:"liveness"`
 	TurnReported bool   `json:"turn_reported"`
 	ExitStatus   *int   `json:"exit_status,omitempty"`
@@ -50,13 +51,13 @@ type Run struct {
 	Exited       string `json:"exited,omitempty"`
 }
 
-const runColumns = `id, task, attempt, generation, host, purpose, dir, COALESCE(pid, 0), COALESCE(start_time, ''), liveness,
+const runColumns = `id, task, attempt, generation, host, purpose, dir, COALESCE(pid, 0), COALESCE(start_time, ''), endpoint, liveness,
 	turn_reported, exit_status, stop_reason, warned_long, from_seq, started_at, last_activity, COALESCE(exited_at, '') FROM runs`
 
 func scanRun(row interface{ Scan(...any) error }) (*Run, error) {
 	var r Run
 	var status sql.NullInt64
-	err := row.Scan(&r.ID, &r.Task, &r.Attempt, &r.Generation, &r.Host, &r.Purpose, &r.Dir, &r.PID, &r.Start, &r.Liveness,
+	err := row.Scan(&r.ID, &r.Task, &r.Attempt, &r.Generation, &r.Host, &r.Purpose, &r.Dir, &r.PID, &r.Start, &r.Endpoint, &r.Liveness,
 		&r.TurnReported, &status, &r.StopReason, &r.WarnedLong, &r.FromSeq, &r.Started, &r.LastActivity, &r.Exited)
 	if status.Valid {
 		code := int(status.Int64)
@@ -311,10 +312,13 @@ func MarkLive(tx *store.Tx, r *Run, pid int, start, endpoint string, harness, mo
 		}
 		return fault.New("stale_run", "run %d already recorded another process", r.ID)
 	}
+	if endpoint == "" {
+		endpoint = r.Endpoint
+	}
 	if _, err := tx.Exec(`UPDATE runs SET pid = ?, start_time = ?, endpoint = ?, liveness = 'live' WHERE id = ?`, pid, start, endpoint, r.ID); err != nil {
 		return err
 	}
-	r.PID, r.Start, r.Liveness = pid, start, "live"
+	r.PID, r.Start, r.Endpoint, r.Liveness = pid, start, endpoint, "live"
 	_, err := tx.Emit("run.started", "system", r.Task, r.Attempt, r.ID, map[string]any{
 		"run": r.Generation, "host": r.Host, "harness": harness, "model": model, "endpoint": endpoint, "purpose": r.Purpose,
 	})

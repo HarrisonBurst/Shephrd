@@ -263,22 +263,27 @@ func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coor
 			return fail(err)
 		}
 	}
-	var id proc.Identity
+	var launched LaunchResponse
 	err = host.Call(ctx, "launch", LaunchRequest{
 		RunDir: run.Dir, Brief: brief, Token: token,
 		Spec: RunSpec{Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness},
-	}, &id)
+	}, &launched)
 	if err != nil {
 		return fail(err)
 	}
 	err = x.write(ctx, func(tx *store.Tx) error {
+		if launched.Endpoint != "" {
+			if _, err := tx.Exec(`UPDATE runs SET endpoint = ? WHERE id = ?`, launched.Endpoint, run.ID); err != nil {
+				return err
+			}
+		}
 		r, err := coord.LoadRun(tx, run.ID)
 		if err != nil {
 			return err
 		}
 		run = r
-		if r.Liveness == "starting" {
-			return coord.MarkLive(tx, r, id.PID, id.Start, "", a.Harness, a.Model)
+		if r.Liveness == "starting" && launched.PID != 0 {
+			return coord.MarkLive(tx, r, launched.PID, launched.Start, "", a.Harness, a.Model)
 		}
 		return nil
 	})
@@ -412,6 +417,12 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		if host.Call(ctx, "probe", proc.Identity{PID: r.PID, Start: r.Start}, &state) == nil {
 			observed = state.State
 		}
+	case r.Liveness == "starting" && r.Endpoint != "" && hostErr == nil:
+		var shown PresentationResponse
+		if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: r.Endpoint}, &shown); err != nil || shown.State != "absent" {
+			return "starting", nil
+		}
+		observed = "exited"
 	case r.Liveness == "starting":
 		started, _ := time.Parse("2006-01-02T15:04:05.000000000Z", r.Started)
 		if time.Since(started) < 2*time.Minute {
@@ -453,11 +464,19 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 // the group is confirmed gone.
 func (x *Executor) stopGroup(ctx context.Context, r *coord.Run) bool {
 	host, err := x.Host(r.Host)
-	if err != nil || r.PID == 0 {
+	if err != nil {
 		return false
 	}
-	var state StateResponse
-	return host.Call(ctx, "stop", StopRequest{PGID: r.PID}, &state) == nil && state.State == "exited"
+	stopped := false
+	if r.PID != 0 {
+		var state StateResponse
+		stopped = host.Call(ctx, "stop", StopRequest{PGID: r.PID}, &state) == nil && state.State == "exited"
+	}
+	if r.Endpoint != "" {
+		closed := host.Call(ctx, "presentation", PresentationRequest{Operation: "close", Endpoint: r.Endpoint}, nil) == nil
+		stopped = stopped || r.PID == 0 && closed
+	}
+	return stopped
 }
 
 // Stop ends a task's current run: it signals the run's process group, and

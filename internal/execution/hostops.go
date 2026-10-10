@@ -119,8 +119,16 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			}
 		}
 		slices.Sort(harnesses)
+		presentations := []string{"headless"}
+		if env.Plugins != nil {
+			for _, p := range env.Plugins.All() {
+				if p.Manifest != nil && slices.Contains(p.Manifest.Provide, plugin.Provide{Type: "presentation"}) {
+					presentations = append(presentations, p.Name)
+				}
+			}
+		}
 		return HostInfo{Host: env.Host, Version: version.String(), Protocol: version.Protocol, DataDir: env.DataDir,
-			Harnesses: harnesses, Presentations: []string{"headless"}}, nil
+			Harnesses: harnesses, Presentations: presentations, Presentation: env.Presentation}, nil
 	case "harness":
 		req, err := decode[HarnessCall](body)
 		if err != nil {
@@ -170,7 +178,18 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, err
 		}
 		req.Spec.Shephrd, req.Spec.Config, req.Spec.Path, req.Spec.Home = env.Self, env.Config, env.Path, env.Home
-		return Launch(req.RunDir, req.Spec, req.Token)
+		if env.Presentation == "" || env.Presentation == "headless" {
+			id, err := Launch(req.RunDir, req.Spec, req.Token)
+			return LaunchResponse{PID: id.PID, Start: id.Start}, err
+		}
+		endpoint, err := present(ctx, env, req)
+		return LaunchResponse{Endpoint: endpoint}, err
+	case "presentation":
+		req, err := decode[PresentationRequest](body)
+		if err != nil {
+			return nil, err
+		}
+		return presentation(ctx, env, req)
 	case "probe":
 		id, err := decode[proc.Identity](body)
 		if err != nil {
