@@ -55,7 +55,7 @@ merge = "external"         # someone merges on GitHub; shephrd task verify prove
 shephrd daemon
 ```
 
-The daemon wakes sub-drivers when their workers report, starts continuation turns, stops inactive runs, pushes inbox items and delivers plugin events. Run it whenever Shephrd is in use, for example as a launchd or systemd user service. Without it every command warns `daemon_not_running`.
+The daemon wakes sub-drivers when their workers report, starts continuation turns, stops inactive runs, pushes inbox items and delivers plugin events. Run it whenever Shephrd is in use, as a launchd agent on macOS or a systemd user service on Linux with lingering enabled, so it outlives your login. Give the service a `PATH` that reaches `git` and your harnesses. Without it every command warns `daemon_not_running`.
 
 ### Install the main driver's skill
 
@@ -138,7 +138,7 @@ Plugins are declared only in the home host's configuration. A package is a git r
 
 ```toml
 [packages.firstparty]
-path = "/path/to/shephrd"          # this repository, after make plugins
+path = "~/.nix-profile/share/shephrd"   # the Nix package, or this repository after make plugins
 
 [plugins.github]
 package = "firstparty"
@@ -150,9 +150,11 @@ merge_method = "squash"
 | Plugin | Provides |
 |---|---|
 | `github` | The forge for `pull_request` landing, through an authenticated `gh` CLI. |
-| `herdr`, `cmux` | Presentation: each session runs in its own terminal tab. Set `presentation = "herdr"` in the host's configuration and the plugin's `socket` and `workspace` (or cmux `window`) options. |
+| `herdr`, `cmux` | Presentation: each task gets a terminal tab, labelled with its ID, role and title, where the harness runs its own interface for every turn. The tab closes when the task closes. Set `presentation = "herdr"` (or `"cmux"`) in the host's configuration. Herdr's options are `workspace`, a workspace label or ID that is created when missing (default `Shephrd tasks`), and `socket` when Herdr is not on its default socket. cmux needs `socket` and `window`, and its socket must accept outside processes: set its socket control to password mode and give the plugin `password`. |
 | `macos-notify` | A notification for each new inbox item. |
 
-The Pi extension `plugins/pi/shephrd-inbox.ts` is not a Shephrd plugin; install it into Pi for a main driver that runs in Pi.
+The Pi extension `plugins/pi/shephrd-inbox.ts` (`share/shephrd/pi/` in the Nix package) is not a Shephrd plugin; install it into Pi for a main driver that runs in Pi. Shephrd's own sessions ignore it.
+
+In a terminal presentation, Claude Code and Codex ask once per repository whether you trust it, and the task's tab waits for the answer. Trust a repository beforehand by opening the harness in it once.
 
 `shephrd plugin list`, `plugin status` and `plugin skill <name>` inspect what is declared. Git packages are fetched with `shephrd plugin sync`.
