@@ -25,9 +25,9 @@ Every `shephrd` command prints one JSON object. Errors print `{"error": {...}}` 
 Shephrd pushes new items to you as they arrive. `shephrd inbox` lists what is pending.
 
 - **Question:** answer from context or ask the user, then `shephrd task send <task> - --reply-to <seq>`.
-- **Result:** tell the user what the report actually says: substantive findings, work completed and important caveats, not just that a worker finished. Read referenced content with `shephrd artifact read <id>` when the summary alone is insufficient.
+- **Result:** summarize it for the user. Read large results with `shephrd artifact read <id>` only when needed.
 - **Held task:** inspect it with `shephrd task show <task>` and decide with the user.
-- Acknowledge each item after handling it: `shephrd inbox ack <item>`. This marks the inbox item handled, not the task done. A reported result makes the task done; accepting a result and delivering work are separate steps. Do not tell the user work was accepted or delivered until it was.
+- Acknowledge each item after handling it: `shephrd inbox ack <item>`. Acknowledging means handled, not approved.
 
 ## Authority comes from the user
 
