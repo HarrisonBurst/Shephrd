@@ -8,7 +8,7 @@ Session execution turns coordination's decisions into running sessions. It prepa
 
 **Owns:** host operations, workspaces, briefs, launching and supervising sessions, liveness, stopping, session logs and reconciliation of interrupted effects.
 
-**Does not own:** task state and run identity ([coordination](coordination.md)), how sessions report and when continuation turns start (notification and result flow), what counts as delivered and when a workspace may be removed (artifacts and authority), or transport conventions ([command surface](commands.md)).
+**Does not own:** task state and run identity ([coordination](coordination.md)), how sessions report and when continuation turns start ([notification and result flow](notifications.md)), what counts as delivered and when a workspace may be removed ([artifacts and authority](artifacts.md)), or transport conventions ([command surface](commands.md)).
 
 ## Hosts
 
@@ -93,7 +93,7 @@ Rotation is recorded as an event. A harness that cannot resume at all starts a n
 
 ### Reporting and output
 
-Sessions report only by calling `shephrd report`, defined by notification and result flow. Execution never parses harness output. The supervisor writes the session's output to a log on its host, readable with `task log`, but the log is never evidence of a result.
+Sessions report only by calling `shephrd report`, defined by [notification and result flow](notifications.md#reporting). Execution never parses harness output. The supervisor writes the session's output to a log on its host, readable with `task log`, but the log is never evidence of a result.
 
 A run that exits without reporting a result, question or blocker gets **one nudge**: a continuation run whose brief says it finished without reporting and must call `shephrd report`. If that run also exits without reporting, the task is `held` with reason `no_report`.
 

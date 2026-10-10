@@ -8,7 +8,7 @@ Durable coordination is the single authority for delegated work: who asked for i
 
 **Owns:** identity and ownership, repositories, tasks and the delegation tree, dependencies, attempts, runs, the task event log and idempotency records.
 
-**Does not own:** how sessions start or how liveness is observed ([session execution](execution.md)), how events reach their owner and are acknowledged (notification and result flow), what makes a result valid or a landing proven, and authority grants (artifacts and authority), command and transport conventions ([command surface](commands.md)), or the plugin mechanism itself ([plugins and extensibility](extensibility.md)).
+**Does not own:** how sessions start or how liveness is observed ([session execution](execution.md)), how events reach their owner and are acknowledged ([notification and result flow](notifications.md)), what makes a result valid or a landing proven, and authority grants ([artifacts and authority](artifacts.md)), command and transport conventions ([command surface](commands.md)), or the plugin mechanism itself ([plugins and extensibility](extensibility.md)).
 
 ## Model
 
@@ -54,7 +54,7 @@ One delegated outcome. Fields:
 | `role` | `worker` does the work itself. `driver` may also create and supervise child tasks. |
 | `repo` | Required for a worker. Optional for a driver, which without one is a general sub-driver with no repository authority. |
 | `title`, `objective`, `acceptance` | Display title (derived from the objective when omitted), full outcome and acceptance criteria. |
-| `deliverable` | The result contract, such as code or report, defined by artifacts and authority. |
+| `deliverable` | The result contract, `code`, `report` or `answer`, defined by [artifacts and authority](artifacts.md#deliverables). |
 | `target` | Host, harness and model, resolved at creation by the router provider unless given explicitly, then recorded. Host is the repository's host when a repository is set. Retry may change it. |
 | `data` | Namespaced, inert plugin data. See [extensibility](#extensibility). |
 | `state`, `reason` | Lifecycle state below, with a reason for `held` and `closed`. |

@@ -187,7 +187,7 @@ Starting a process per call keeps plugins stateless, isolated and simple to writ
 
 ## Dispatcher
 
-`shephrd daemon` is one long-running process on the home host, guarded by a lock. It delivers events to plugin subscribers and, as the notification spec will define, wakes owners and sessions. It decides nothing. It delivers durable facts to whoever subscribed.
+`shephrd daemon` is one long-running process on the home host, guarded by a lock. It delivers events to plugin subscribers, [wakes owners and sessions](notifications.md#waking-turns), pushes inbox items, and runs [reconciliation](execution.md#reconciliation). It decides nothing. It delivers durable facts to whoever subscribed.
 
 **The daemon is expected to run whenever Shephrd is in use.** Delegation depends on it, since it is what wakes sub-drivers when their children report. If it is not running, nothing is lost and every command still works, but nothing is pushed until it starts. Every command's output then carries a `daemon_not_running` warning, so the gap is never silent.
 

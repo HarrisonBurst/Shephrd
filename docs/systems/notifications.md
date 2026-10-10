@@ -8,7 +8,7 @@ Notification and result flow carries what sessions report up to the owner that d
 
 **Owns:** the `report` command, which reports count as a finished turn, routing to owners, the inbox for drivers, waking sub-drivers and workers for continuation turns, and push delivery to drivers.
 
-**Does not own:** the event log and task state ([coordination](coordination.md)), starting and stopping runs ([session execution](execution.md)), whether a result is valid or delivered (artifacts and authority), or the daemon and event subscriptions themselves ([plugins and extensibility](extensibility.md#dispatcher)).
+**Does not own:** the event log and task state ([coordination](coordination.md)), starting and stopping runs ([session execution](execution.md)), whether a result is valid or delivered ([artifacts and authority](artifacts.md)), or the daemon and event subscriptions themselves ([plugins and extensibility](extensibility.md#dispatcher)).
 
 ## Reporting
 

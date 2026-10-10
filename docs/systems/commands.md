@@ -77,7 +77,7 @@ Authorization is the same rule everywhere, using ownership from [coordination](c
 
 - **Read:** the caller's own subtree. The operator reads everything.
 - **Mutate a task:** its owner only. A run may also report on its own task.
-- **Irreversible actions** (landing, discard, release) additionally need a recorded grant, defined by artifacts and authority.
+- **Irreversible actions** (landing, discard, release) additionally need a recorded grant, defined by [artifacts and authority](artifacts.md#grants).
 - **Host administration** (`init`, `repo add`, `plugin sync`) is operator-only, because it changes what runs on a host.
 
 A remote driver is limited by what it owns and what it has been granted, not by a reduced command list.
@@ -131,35 +131,44 @@ Paths for the store, workspaces and data have defaults and are set only when nee
 
 ## Command map
 
-Provisional. Rows owned by later specs are placeholders for those specs to finalize.
+Each command's behavior is defined by the spec named in its row.
 
 | Command | Purpose | Spec |
 |---|---|---|
 | `init` | Create configuration, and the store on the home host | Command surface |
 | `version` | Binary and protocol version | Command surface |
-| `skill main`, `skill subdriver`, `skill worker` | Print the guidance for a role | Driver and worker guidance |
-| `serve` | SSH forced-command entry point | Command surface |
-| `repo add`, `repo list` | Register and list repositories | Coordination |
-| `task create` | Create a root task, or a child task from a driver run | Coordination |
-| `task show`, `task list` | Read a task with its children and log, or list a subtree | Coordination |
-| `task start`, `stop`, `resume`, `retry` | Start a run, stop, new run on the same attempt, new attempt | Coordination, session execution |
-| `task log` | Read a run's session log | Session execution |
-| `task send` | Message or reply to a task | Coordination, notification |
-| `task cancel`, `task adopt`, `task note` | Cancel, adopt a root, record a note | Coordination |
-| `task data set` | Write the caller's plugin data namespace on a task | Coordination |
-| `report progress`, `question`, `result`, `blocker`, `note` | A run reports on its task | Notification |
-| `inbox`, `inbox wait`, `inbox ack` | A driver reads, waits for and acknowledges items needing attention | Notification |
-| `task deliver`, `task verify`, `task discard` | Accept or land a result, re-check landing proof, discard work | Artifacts and authority |
-| `grant`, `grant revoke` | Delegate or revoke `land` and `discard` authority | Artifacts and authority |
-| `artifact show`, `artifact read` | Read an artifact's metadata or bytes | Artifacts and authority |
-| `workspace reconcile` | Classify interrupted effects on every host | Session execution |
-| `host list` | Hosts with reachability, version and installed providers | Session execution |
-| `events` | Read or follow the public event stream from a cursor | Plugins and extensibility |
-| `daemon` | Deliver events to plugins and owners on the home host | Plugins and extensibility |
-| `plugin sync`, `list`, `status`, `skill` | Fetch declared packages, and inspect declared plugins | Plugins and extensibility |
-| `<plugin-name> ...` | Subcommands added by plugins | Plugins and extensibility |
+| `serve` | SSH forced-command entry point on the home host | Command surface |
+| `repo add`, `repo list` | Register and list repositories | [Coordination](coordination.md) |
+| `task create` | Create a root task, or a child task from a driver run, with `--after <task>` dependencies and `--until merged` | [Coordination](coordination.md) |
+| `task show`, `task list` | Read a task with its children and log, or list a subtree with filters such as role, repository and state | [Coordination](coordination.md) |
+| `task send` | Send a message or, with `--reply-to`, a reply | [Coordination](coordination.md), [notification](notifications.md) |
+| `task cancel`, `task adopt`, `task note` | Cancel a task that has nothing to lose, adopt a root, record an owner's note | [Coordination](coordination.md) |
+| `task data set` | Write the caller's plugin data namespace on a task | [Coordination](coordination.md) |
+| `task start`, `task resume`, `task retry` | Start a run on a new attempt, the same attempt, or a new attempt after a previous one | [Execution](execution.md) |
+| `task stop` | Stop the current run, with `--tree` for a whole subtree | [Execution](execution.md) |
+| `task log` | Read a run's session log | [Execution](execution.md) |
+| `workspace reconcile` | Classify interrupted effects on every host | [Execution](execution.md) |
+| `host list` | Hosts with reachability, version and installed providers | [Execution](execution.md) |
+| `report progress`, `question`, `result`, `blocker`, `note` | A run reports on its own task | [Notification](notifications.md) |
+| `inbox`, `inbox ack`, `inbox wait` | A driver reads, acknowledges, or streams items needing attention | [Notification](notifications.md) |
+| `task deliver`, `task verify`, `task discard` | Accept or land a result, re-check landing proof, discard work | [Artifacts](artifacts.md) |
+| `grant`, `grant revoke` | Delegate or revoke `land` and `discard` authority | [Artifacts](artifacts.md) |
+| `artifact show`, `artifact read` | Read an artifact's metadata or bytes | [Artifacts](artifacts.md) |
+| `events` | Read the public event stream from `--after <seq>`, or `--follow` it | [Plugins](extensibility.md) |
+| `daemon` | Deliver events, wake owners and reconcile on the home host | [Plugins](extensibility.md), [notification](notifications.md) |
+| `plugin sync`, `plugin list`, `plugin status`, `plugin skill` | Fetch declared packages and inspect declared plugins | [Plugins](extensibility.md) |
+| `<plugin-name> ...` | Subcommands added by plugins | [Plugins](extensibility.md) |
+| `skill main`, `skill subdriver`, `skill worker` | Print a role's guidance | [Guidance](skill.md) |
 
-That is about 25 core commands, against about 60 today.
+`help` prints text help for any command. `agent` and `_run` are private commands between Shephrd binaries of the same release, not part of this surface.
+
+That is 44 leaf commands, against 68 today. Each role uses far fewer:
+
+| Role | Commands it normally uses |
+|---|---|
+| Worker | `report` |
+| Sub-driver | `task create`, `task show`, `task list`, `task send`, `task deliver`, `report`, `artifact read` |
+| Main driver | `task create`, `task send`, `task show`, `task list`, `task deliver`, `grant`, `inbox`, `inbox ack`, `artifact read` |
 
 ## What this replaces
 
@@ -169,8 +178,12 @@ That is about 25 core commands, against about 60 today.
 | `--json` and text output | JSON always |
 | `--driver-id` on every command | Caller identity from context |
 | `--request-file <path>` | stdin |
-| `subdriver`, `plan`, separate annotation commands | `task` with roles, dependencies and notes |
-| `worker` family | `task start`, `stop`, `resume`, `retry`, `send` |
+| `subdriver`, `plan`, and the annotation commands | `task` with roles, dependencies, requests and notes |
+| `worker` family | `task start`, `resume`, `retry`, `stop`, `send` and `log` |
+| `wake` family, claim tokens and parking | `inbox`, push delivery and the daemon |
+| `task obligations` | `inbox` and `task list` |
+| `task attest-delivery`, `task attest-report-recovery`, `task verify-delivery`, `workspace release` | `task deliver`, `task verify`, and release when a task closes |
+| `repo scan`, `repo context` | Removed; discovery can be a plugin, and briefs point to repository context |
 | `legacy`, `--legacy-coordinator-json`, `protocol validate` | Removed |
 
 ## Extensibility
