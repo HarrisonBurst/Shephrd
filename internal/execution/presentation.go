@@ -52,7 +52,7 @@ func present(ctx context.Context, env HostEnv, req LaunchRequest) (string, error
 	if err := os.WriteFile(tokenPath(req.RunDir), []byte(req.Token), 0o600); err != nil {
 		return "", err
 	}
-	command := shellQuote(env.Self) + " _run " + shellQuote(req.RunDir)
+	command := "clear; " + shellQuote(env.Self) + " _run " + shellQuote(req.RunDir)
 	resp, err := presentation(ctx, env, PresentationRequest{Operation: "open", Title: req.Title, Command: command, Workspace: req.Spec.Workspace, Reuse: req.Reuse})
 	if err != nil {
 		os.Remove(tokenPath(req.RunDir))

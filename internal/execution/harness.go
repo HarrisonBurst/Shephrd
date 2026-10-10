@@ -41,11 +41,13 @@ var Builtin = map[string]func(HarnessRequest) HarnessCommand{
 
 func claudeCode(r HarnessRequest) HarnessCommand {
 	args := []string{"claude", "--dangerously-skip-permissions"}
-	if !r.Interactive {
+	if r.Interactive {
+		args = append(args, "--settings", `{"skipDangerousModePermissionPrompt":true}`)
+	} else {
 		args = append(args, "-p", "--output-format", "stream-json", "--verbose")
 	}
 	if r.ReadOnly {
-		args = append(args, "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit")
+		args = append(args, "--disallowedTools", "Edit", "Write", "NotebookEdit")
 	}
 	if r.Model != "" {
 		args = append(args, "--model", r.Model)

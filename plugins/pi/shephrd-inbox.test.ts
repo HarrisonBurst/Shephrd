@@ -12,7 +12,7 @@ const item = (id: number) => ({
   next: { read: ["shephrd", "task", "show", "t_1"], ack: ["shephrd", "inbox", "ack", String(id)] },
 });
 
-function harness(entries: unknown[] = []) {
+function harness(entries: unknown[] = [], env: Record<string, string> = {}) {
   const handlers: Record<string, (event: any, ctx?: any) => Promise<void>> = {};
   const sent: string[] = [];
   const appended: unknown[] = [];
@@ -28,6 +28,7 @@ function harness(entries: unknown[] = []) {
     spawn: ((_cmd: string, args: string[]) => (spawned.push(args), child)) as any,
     execFile: ((_cmd: string, args: string[], done: () => void) => (acks.push(args), done())) as any,
     shephrd: "shephrd",
+    env,
   };
   createShephrdInbox(deps)(pi as any);
   const ctx = { mode: "tui", sessionManager: { getBranch: () => entries }, ui: { notify() {} } };
@@ -75,5 +76,11 @@ test("a restarted session resumes after the last acknowledged item", async () =>
 test("print mode does not hold the inbox", async () => {
   const h = harness();
   await h.handlers.session_start({}, { ...h.ctx, mode: "print" });
+  assert.equal(h.spawned.length, 0);
+});
+
+test("a Shephrd session does not hold the inbox", async () => {
+  const h = harness([], { SHEPHRD_RUN_TOKEN: "token" });
+  await h.handlers.session_start({}, h.ctx);
   assert.equal(h.spawned.length, 0);
 });

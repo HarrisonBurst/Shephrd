@@ -5,9 +5,16 @@ import "runtime/debug"
 // Protocol is the request and host-operation protocol every host speaks.
 const Protocol = 1
 
+// Release is set at link time by builds without VCS information, such as
+// the Nix package.
+var Release string
+
 // String is this binary's release: its module version, or the commit it
 // was built from. All hosts in an installation must run the same release.
 func String() string {
+	if Release != "" {
+		return Release
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"
