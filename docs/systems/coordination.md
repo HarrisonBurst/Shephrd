@@ -187,6 +187,8 @@ Every event log entry is published as a plugin event:
 | `task.data` | Plugin namespace and changed keys |
 | `attempt.created` | Attempt, base, target |
 | `run.started` | Run generation, host |
+| `task.ready` | A queued task whose dependencies all reached their milestones |
+| `task.stale` | Input refused from a run that is no longer current |
 
 ### Intercept points
 

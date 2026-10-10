@@ -16,24 +16,25 @@ import (
 )
 
 type Config struct {
-	Path      string                  `toml:"-"`
-	Host      string                  `toml:"host"`
-	Home      string                  `toml:"home"`
-	Hosts     map[string]HostConfig   `toml:"hosts"`
-	Driver    string                  `toml:"driver"`
-	MaxDepth  int                     `toml:"max_depth"`
-	Store     string                  `toml:"store"`
-	DataDir   string                  `toml:"data_dir"`
-	Defaults  Target                  `toml:"defaults"`
-	Routes    []Route                 `toml:"routes"`
-	Packages  map[string]Package      `toml:"packages"`
-	Plugins   map[string]PluginConfig `toml:"plugins"`
-	Providers map[string]string       `toml:"providers"`
-	Skills    map[string]Skill        `toml:"skills"`
-	Timeouts  Timeouts                `toml:"timeouts"`
-	Drivers   map[string]Driver       `toml:"drivers"`
-	Repos     map[string]Repo         `toml:"repos"`
-	Grants    []Grant                 `toml:"grants"`
+	Path         string                  `toml:"-"`
+	Host         string                  `toml:"host"`
+	Home         string                  `toml:"home"`
+	Presentation string                  `toml:"presentation"`
+	Hosts        map[string]HostConfig   `toml:"hosts"`
+	Driver       string                  `toml:"driver"`
+	MaxDepth     int                     `toml:"max_depth"`
+	Store        string                  `toml:"store"`
+	DataDir      string                  `toml:"data_dir"`
+	Defaults     Target                  `toml:"defaults"`
+	Routes       []Route                 `toml:"routes"`
+	Packages     map[string]Package      `toml:"packages"`
+	Plugins      map[string]PluginConfig `toml:"plugins"`
+	Providers    map[string]string       `toml:"providers"`
+	Skills       map[string]Skill        `toml:"skills"`
+	Timeouts     Timeouts                `toml:"timeouts"`
+	Drivers      map[string]Driver       `toml:"drivers"`
+	Repos        map[string]Repo         `toml:"repos"`
+	Grants       []Grant                 `toml:"grants"`
 }
 
 // HostConfig names how the home host reaches a worker host over SSH.

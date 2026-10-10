@@ -28,14 +28,16 @@ type Host interface {
 // HostEnv is what a machine knows about itself, including the harness
 // providers declared in its own configuration.
 type HostEnv struct {
-	Host    string
-	DataDir string
-	Config  string
-	Self    string
-	Path    string
-	Home    string
-	Harness func(context.Context, string, HarnessRequest) (HarnessCommand, error)
-	Plugins *plugin.Registry
+	Host         string
+	DataDir      string
+	Config       string
+	Self         string
+	Path         string
+	Home         string
+	Harness      func(context.Context, string, HarnessRequest) (HarnessCommand, error)
+	Plugins      *plugin.Registry
+	Presentation string
+	Getenv       config.Getenv
 }
 
 type HarnessCall struct {
@@ -50,6 +52,7 @@ type HostInfo struct {
 	DataDir       string   `json:"data_dir"`
 	Harnesses     []string `json:"harnesses"`
 	Presentations []string `json:"presentations"`
+	Presentation  string   `json:"presentation,omitempty"`
 }
 
 func LocalEnv(cfg *config.Config, getenv config.Getenv) (HostEnv, error) {
@@ -57,7 +60,8 @@ func LocalEnv(cfg *config.Config, getenv config.Getenv) (HostEnv, error) {
 	if err != nil {
 		return HostEnv{}, err
 	}
-	return HostEnv{Host: cfg.Host, DataDir: cfg.DataDir, Config: cfg.Path, Self: self, Path: getenv("PATH"), Home: getenv("HOME")}, nil
+	return HostEnv{Host: cfg.Host, DataDir: cfg.DataDir, Config: cfg.Path, Self: self, Path: getenv("PATH"), Home: getenv("HOME"),
+		Presentation: cfg.Presentation, Getenv: getenv}, nil
 }
 
 type Local struct {

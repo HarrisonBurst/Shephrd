@@ -1,0 +1,7 @@
+name = "macos-notify"
+version = "1.0.0"
+protocol = 1
+exec = ["bin/shephrd-macos-notify"]
+
+[events]
+subscribe = ["inbox.added"]

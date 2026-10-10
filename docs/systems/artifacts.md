@@ -192,6 +192,8 @@ Follows [plugins and extensibility](extensibility.md).
 | `task.delivered` | Task, artifact, proof kind and its source |
 | `grant.added`, `grant.revoked` | Grant, grantor, grantee, actions, scope, reason |
 | `grant.used` | Grant, action, task |
+| `pull_request.retargeted` | Stacked task, pull request, new target branch |
+| `workspace.retained` | Task, attempt, path, why it was kept |
 
 ### Intercept points
 

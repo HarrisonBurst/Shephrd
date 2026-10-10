@@ -1,0 +1,7 @@
+name = "cmux"
+version = "1.0.0"
+protocol = 1
+exec = ["bin/shephrd-cmux"]
+
+[[provide]]
+type = "presentation"
