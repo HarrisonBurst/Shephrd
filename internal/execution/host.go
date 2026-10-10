@@ -54,6 +54,7 @@ type HostInfo struct {
 	Harnesses     []string `json:"harnesses"`
 	Presentations []string `json:"presentations"`
 	Presentation  string   `json:"presentation,omitempty"`
+	Shephrd       string   `json:"shephrd"`
 }
 
 func LocalEnv(cfg *config.Config, getenv config.Getenv) (HostEnv, error) {

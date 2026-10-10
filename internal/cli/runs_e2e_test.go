@@ -67,10 +67,14 @@ func TestWorkerRunsInItsOwnWorkspaceAndReports(t *testing.T) {
 		t.Fatalf("harness calls: %v", env.Calls())
 	}
 	call := calls[0]
-	if call["harness"] != "codex" || call["cwd"] != attempt["workspace"] || !strings.Contains(call["brief"].(string), "Fix the bug") {
+	if call["harness"] != "codex" || call["cwd"] != attempt["workspace"] || !strings.Contains(call["brief"].(string), "Fix the bug") ||
+		!strings.Contains(call["brief"].(string), "Run Shephrd as `"+env.Bin+"`") {
 		t.Fatalf("harness call: %v", call)
 	}
 	vars := envOf(call)
+	if !strings.HasPrefix(vars["PATH"], filepath.Dir(env.Bin)+":") {
+		t.Fatalf("the session's PATH does not start with Shephrd's directory: %s", vars["PATH"])
+	}
 	for _, key := range []string{"PATH", "HOME", "USER", "SHEPHRD_CONFIG", "SHEPHRD_RUN_TOKEN"} {
 		if vars[key] == "" {
 			t.Fatalf("harness environment lacks %s: %v", key, vars)

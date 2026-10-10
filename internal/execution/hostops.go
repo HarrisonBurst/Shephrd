@@ -128,7 +128,7 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			}
 		}
 		return HostInfo{Host: env.Host, Version: version.String(), Protocol: version.Protocol, DataDir: env.DataDir,
-			Harnesses: harnesses, Presentations: presentations, Presentation: env.Presentation}, nil
+			Harnesses: harnesses, Presentations: presentations, Presentation: env.Presentation, Shephrd: env.Self}, nil
 	case "harness":
 		req, err := decode[HarnessCall](body)
 		if err != nil {
