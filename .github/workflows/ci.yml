@@ -23,11 +23,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '24'
       - run: make test-docs
       - run: make test
-      - run: make test-extension
       - run: go vet ./...
       - run: git diff --check

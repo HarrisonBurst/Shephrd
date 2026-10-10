@@ -1,7 +1,7 @@
 # Shephrd
 
-Local CLI for isolated repository workers, durable tasks, and explicit lifecycle evidence.
+A Go CLI that delegates repository work from one main driver to sub-drivers and isolated workers, with a durable record in SQLite.
 
-Follow the task request and [repository guidance](../AGENTS.md). No workflow module is selected by default; [quick-change](modules/quick-change.md), [thorough-review](modules/thorough-review.md), and [repository-research](modules/repository-research.md) are available when requested.
-
-Project memory is optional and local. When enabled, private notes may be kept outside the public snapshot; follow repository guidance and the current task's memory setting.
+- [System design](../docs/design.md) and the [system specs](../docs/systems/) are the contract.
+- The [implementation plan](../docs/implementation.md) orders the build by milestone.
+- Follow the [repository guidance](../AGENTS.md) for conventions and checks.
