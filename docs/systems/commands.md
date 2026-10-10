@@ -11,7 +11,7 @@ Parity holds by construction: there is one binary and one command tree, and a fo
 ## Topology
 
 - **Home host:** holds the store and runs `shephrd daemon`. It may also run sessions. Its configuration has no `home`. Exactly one per installation.
-- **Client host:** configuration sets `home` to an SSH target. Every public command run there is forwarded to the home host.
+- **Client host:** configuration sets `home` to an SSH target. Every public command run there is forwarded to the home host, except `init` and `version`, which describe the local machine.
 - **Worker host:** a client host where sessions run. Session execution reaches it over SSH to create workspaces and start runs.
 
 Put the home host where sessions run most and keep it always on. Sessions report constantly and the daemon wakes sub-drivers constantly, so that traffic stays local. If the home host sleeps, delegation pauses with it.

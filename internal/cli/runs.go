@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os/exec"
 	"slices"
 	"time"
 
@@ -33,7 +32,7 @@ func (a *app) executor() (*execution.Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	x.Inputs = artifact.Inputs(db, cfg)
+	x.Inputs = artifact.Inputs(db, cfg, x.Host)
 	return x, nil
 }
 
@@ -165,11 +164,15 @@ func taskLog(a *app) *cobra.Command {
 		if run == nil {
 			return nil, fault.New("not_found", "%s has no such run", t.Ref)
 		}
-		text, truncated, err := execution.ReadLog(run.Dir, min(max(limit, 1), 1<<20))
+		x, err := a.executor()
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"task": t.Ref, "run": run, "log": text, "truncated": truncated}, nil
+		log, err := x.Log(a.ctx, run, min(max(limit, 1), 1<<20))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"task": t.Ref, "run": run, "log": log.Text, "truncated": log.Truncated}, nil
 	})
 	return cmd
 }
@@ -337,18 +340,27 @@ func hostCommand(a *app) *cobra.Command {
 			if err != nil {
 				return nil, err
 			}
-			harnesses := []string{}
-			for name := range execution.Builtin {
-				binary := map[string]string{"claude-code": "claude", "codex": "codex", "pi": "pi"}[name]
-				if _, err := exec.LookPath(binary); err == nil {
-					harnesses = append(harnesses, name)
-				}
+			x, err := a.executor()
+			if err != nil {
+				return nil, err
 			}
-			slices.Sort(harnesses)
-			return map[string]any{"hosts": []map[string]any{{
-				"name": cfg.Host, "home": true, "reachable": true, "version": Version(), "protocol": Protocol,
-				"harnesses": harnesses, "presentations": []string{"headless"},
-			}}}, nil
+			names := []string{cfg.Host}
+			for name := range cfg.Hosts {
+				names = append(names, name)
+			}
+			slices.Sort(names[1:])
+			hosts := []map[string]any{}
+			for _, name := range names {
+				entry := map[string]any{"name": name, "home": name == cfg.Host, "reachable": false}
+				if _, info, err := x.HostInfo(a.ctx, name); err != nil {
+					entry["error"] = fault.As(err)
+				} else {
+					entry["reachable"], entry["version"], entry["protocol"] = true, info.Version, info.Protocol
+					entry["harnesses"], entry["presentations"] = info.Harnesses, info.Presentations
+				}
+				hosts = append(hosts, entry)
+			}
+			return map[string]any{"hosts": hosts}, nil
 		}),
 	})
 	return cmd

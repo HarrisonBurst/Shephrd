@@ -2,8 +2,6 @@ package artifact
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
 
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
@@ -13,22 +11,27 @@ import (
 )
 
 type Service struct {
-	DB  *store.Store
-	Cfg *config.Config
+	DB   *store.Store
+	Cfg  *config.Config
+	Host func(string) (execution.Host, error)
 }
 
 type Delivered struct {
-	Task     *coord.Task `json:"task"`
-	Artifact *Artifact   `json:"artifact,omitempty"`
-	Landing  *Landed     `json:"landing,omitempty"`
-	Released []string    `json:"released"`
-	Retained []string    `json:"retained"`
-	Warnings []string    `json:"-"`
+	Task     *coord.Task       `json:"task"`
+	Artifact *Artifact         `json:"artifact,omitempty"`
+	Landing  *execution.Landed `json:"landing,omitempty"`
+	Released []string          `json:"released"`
+	Retained []string          `json:"retained"`
+	Warnings []string          `json:"-"`
 }
 
-func (s *Service) repo(t *coord.Task) (path, branch string, err error) {
-	err = s.DB.QueryRow(`SELECT path, default_branch FROM repos WHERE id = ?`, t.RepoID).Scan(&path, &branch)
-	return path, branch, err
+func (s *Service) repo(t *coord.Task) (path, branch string, host execution.Host, err error) {
+	var name string
+	if err = s.DB.QueryRow(`SELECT path, default_branch, host FROM repos WHERE id = ?`, t.RepoID).Scan(&path, &branch, &name); err != nil {
+		return "", "", nil, err
+	}
+	host, err = s.Host(name)
+	return path, branch, host, err
 }
 
 // Deliver accepts a done task's current result, or lands its code using
@@ -72,11 +75,12 @@ func (s *Service) Deliver(ctx context.Context, c coord.Caller, t *coord.Task) (*
 	if landing.Mode != "direct" {
 		return nil, fault.New("landing_not_configured", "landing mode %s needs its forge provider", landing.Mode)
 	}
-	repo, branch, err := s.repo(t)
+	repo, branch, host, err := s.repo(t)
 	if err != nil {
 		return nil, err
 	}
-	landed, err := LandDirect(repo, branch, art.Commit, landing.Method, "Merge "+t.Ref+": "+t.Title, filepath.Join(s.Cfg.DataDir, "scratch"))
+	landed := &execution.Landed{}
+	err = host.Call(ctx, "land_direct", execution.LandRequest{Repo: repo, Branch: branch, Commit: art.Commit, Method: landing.Method, Message: "Merge " + t.Ref + ": " + t.Title}, landed)
 	if err != nil {
 		s.DB.Write(ctx, func(tx *store.Tx) error {
 			return recordLanding(tx, c, t, art, landing.Mode, "failed", nil, fault.As(err).Message)
@@ -103,7 +107,7 @@ func (s *Service) Deliver(ctx context.Context, c coord.Caller, t *coord.Task) (*
 	return s.finish(ctx, c, t.ID, out)
 }
 
-func recordLanding(tx *store.Tx, c coord.Caller, t *coord.Task, art *Artifact, mode, outcome string, landed *Landed, detail string) error {
+func recordLanding(tx *store.Tx, c coord.Caller, t *coord.Task, art *Artifact, mode, outcome string, landed *execution.Landed, detail string) error {
 	var tip, proof, source string
 	if landed != nil {
 		tip, proof, source = landed.Tip, landed.Proof, landed.Source
@@ -166,7 +170,7 @@ func (s *Service) Release(ctx context.Context, id int64, force bool) (released, 
 		}
 		path := ""
 		if t.RepoID != 0 {
-			if path, _, err = s.repo(t); err != nil {
+			if path, _, _, err = s.repo(t); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -174,12 +178,18 @@ func (s *Service) Release(ctx context.Context, id int64, force bool) (released, 
 		if err != nil {
 			return nil, nil, err
 		}
-		removeErr := execution.RemoveWorkspace(path, a, force, sealed)
+		host, err := s.Host(a.Host)
+		if err != nil {
+			return nil, nil, err
+		}
+		removeErr := host.Call(ctx, "remove_workspace", execution.RemoveRequest{
+			Repo: path, Path: a.Workspace, Branch: a.Branch, Base: a.Base, Force: force, Sealed: sealed,
+		}, nil)
 		err = s.DB.Write(ctx, func(tx *store.Tx) error {
 			switch {
 			case removeErr == nil:
 				return coord.SetWorkspaceState(tx, "system", a, "released", "")
-			case errors.Is(removeErr, execution.ErrDirty):
+			case fault.As(removeErr).Kind == "workspace_dirty":
 				seq, err := tx.Emit("workspace.retained", "system", t.ID, a.N, 0, map[string]any{
 					"attempt": a.N, "path": a.Workspace, "reason": "uncommitted changes",
 				})
@@ -220,15 +230,17 @@ func (s *Service) Verify(ctx context.Context, c coord.Caller, t *coord.Task) (*D
 	if err != nil {
 		return nil, err
 	}
-	repo, branch, err := s.repo(t)
+	repo, branch, host, err := s.repo(t)
 	if err != nil {
 		return nil, err
 	}
-	proven, err := ProveAncestry(repo, branch, art.Commit)
-	if err != nil {
+	var proof struct {
+		Proven bool `json:"proven"`
+	}
+	if err := host.Call(ctx, "prove_ancestry", execution.AncestryRequest{Repo: repo, Branch: branch, Commit: art.Commit}, &proof); err != nil {
 		return nil, err
 	}
-	if !proven {
+	if !proof.Proven {
 		return nil, fault.New("not_proven", "%s is not on %s yet", art.Commit, branch).WithNext("task", "verify", t.Ref)
 	}
 	err = s.DB.Write(ctx, func(tx *store.Tx) error {

@@ -3,13 +3,11 @@ package execution
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
 	"shephrd/internal/fault"
 	"shephrd/internal/plugin"
-	"shephrd/internal/proc"
 	"shephrd/internal/store"
 )
 
@@ -57,7 +55,7 @@ func (x *Executor) Interrupt(ctx context.Context, r *coord.Run, reason string) e
 		return err
 	}
 	r.StopReason = reason
-	if !proc.StopGroup(r.PID, 5*time.Second) {
+	if !x.stopGroup(ctx, r) {
 		return x.write(ctx, func(tx *store.Tx) error { return coord.SetLiveness(tx, r, "unknown") })
 	}
 	if _, err := x.run(ctx, r.Task, "nudge", func(tx *store.Tx, t *coord.Task) (bool, error) {
