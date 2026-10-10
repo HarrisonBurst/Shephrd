@@ -75,7 +75,7 @@ extend = "/path/to/house-rules.md"
 
 ### Receive results
 
-Results, questions and held tasks reach the main driver's inbox. `shephrd inbox` lists them; read the substantive report body and share its findings with the user, reading referenced artifacts when needed. `shephrd inbox ack <item>` marks an item handled, not the task done or its result accepted or delivered. A valid reported result makes a task `done`; the owner accepts and delivers it separately with `shephrd task deliver <task>`. To have inbox items pushed, configure a delivery for the driver:
+Results, questions and held tasks reach the main driver's inbox. Read each report and any referenced artifacts, share the findings with the user, then acknowledge the item. Check `shephrd task show` before calling work complete: a reused sub-driver is done only after all requests are answered. Deliver report or answer tasks without a grant; code delivery needs `land`, and code in pull-request mode stays done until the pull request merges. To have inbox items pushed, configure a delivery for the driver:
 
 ```toml
 [drivers.main.delivery]

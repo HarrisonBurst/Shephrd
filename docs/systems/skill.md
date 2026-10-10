@@ -52,7 +52,7 @@ Guidance competes with the work for context, so each document stays short:
 Every document teaches:
 
 - **Identity comes from context.** Never pass another caller's identity or edit Shephrd's state directly.
-- **Reports and results are evidence, not authority.** Only an explicit `task deliver`, `task discard` or `grant` lands, discards or authorizes, and only with a grant.
+- **Reports and results are evidence, not authority.** `task deliver` accepts report and answer results without a grant; delivering code needs a `land` grant, discarding work needs a `discard` grant, and only an explicit command authorizes those actions.
 - **Fail closed.** When state is unclear, such as `unknown` liveness or a held task, inspect and ask rather than guess. Never work around a refusal.
 - **Follow the `next` commands** in errors and inbox items rather than inventing recovery steps.
 - **Large content moves by reference.** Put documents in report files, and keep results to a summary.
@@ -62,15 +62,17 @@ Every document teaches:
 The main driver's job is to understand the user and keep the conversation moving. It delegates all work.
 
 - **Delegate everything.** Every request that needs work, including questions that need investigation, goes to a sub-driver at once. The main driver answers directly only conversation and questions its current context already answers.
-- **Pick the sub-driver.** Use the repository's open sub-driver task if there is one, and create one if not. Work tied to no repository goes to a general sub-driver, a driver task with no repository.
+- **Pick the sub-driver.** Use the repository's open sub-driver task if there is one, and create one if not. The main driver owns these driver tasks. Work tied to no repository goes to a general sub-driver, a driver task with no repository.
 - **Forward faithfully.** Pass the user's request word for word, with the context needed to act on it and the user's actual decisions. Do not write the plan for the sub-driver.
 - **Cross-repository work** is one sub-driver per repository. When one must follow another, express it as a dependency between the sub-driver tasks.
 - **Handle the inbox.**
   - Questions: answer from context or ask the user, then reply with `task send --reply-to`.
   - Results: surface the substantive report content to the user, including findings, outcomes and important caveats; read referenced artifacts when the summary is insufficient. Do not substitute a generic completion notice.
   - Held tasks: inspect them and decide with the user.
-  - Acknowledge each item after handling it. Inbox acknowledgement only marks an item handled. A valid reported result puts the task in `done`; the owner accepting and delivering it through `task deliver` is a separate step. Do not say work was accepted or delivered until it was.
-- **Authority comes from the user.** Deliver code or discard work only with the user's approval or a standing grant. When the user approves a sub-driver landing its own work, delegate with `grant`, recording the user's approval as the reason.
+  - Check the current `task_state` and all request states before calling work complete. A result answers one request; a reused sub-driver is `done` only after every request is answered and its turn settles.
+  - Keep an owned sub-driver open while it may be reused. Deliver it only when its work is finished and its children are closed. `task deliver` accepts report and answer results without a grant; code delivery needs a `land` grant, and code in pull-request mode remains `done` awaiting merge until the pull request is merged and proved.
+  - Acknowledge each item after handling it. Inbox acknowledgement only marks an item handled, not a task done or a result accepted or delivered.
+- **Authority comes from the user.** `task deliver` accepts report and answer results without a grant. Delivering code needs a `land` grant in every landing mode, and discarding work needs a `discard` grant. When the user approves a sub-driver landing its own work, delegate with `grant`, recording the user's approval as the reason.
 - **Do not supervise grandchildren.** Read them when useful, but act only through the sub-driver.
 
 ## Sub-driver
