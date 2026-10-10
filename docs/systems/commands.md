@@ -77,7 +77,7 @@ Authorization is the same rule everywhere, using ownership from [coordination](c
 
 - **Read:** the caller's own subtree. The operator reads everything.
 - **Mutate a task:** its owner only. A run may also report on its own task.
-- **Irreversible actions** (landing, discard, release) additionally need a recorded grant, defined by [artifacts and authority](artifacts.md#grants).
+- **Code landing and discard** additionally need a recorded grant and explicit user approval, defined by [artifacts and authority](artifacts.md#grants).
 - **Host administration** (`init`, `repo add`, `plugin sync`) is operator-only, because it changes what runs on a host.
 
 A remote driver is limited by what it owns and what it has been granted, not by a reduced command list.
@@ -145,7 +145,7 @@ Each command's behavior is defined by the spec named in its row.
 | `task cancel`, `task adopt`, `task note` | Cancel a task that has nothing to lose, adopt a root, record an owner's note | [Coordination](coordination.md) |
 | `task data set` | Write the caller's plugin data namespace on a task | [Coordination](coordination.md) |
 | `task start`, `task resume`, `task retry` | Start a run on a new attempt, the same attempt, or a new attempt after a previous one | [Execution](execution.md) |
-| `task stop` | Stop the current run, with `--tree` for a whole subtree | [Execution](execution.md) |
+| `task stop` | Stop the current run, with `--tree` for a whole subtree or `--abandon` for an unstarted presentation run after fail-closed checks | [Execution](execution.md) |
 | `task log` | Read a run's session log | [Execution](execution.md) |
 | `workspace reconcile` | Classify interrupted effects on every host | [Execution](execution.md) |
 | `host list` | Hosts with reachability, version and installed providers | [Execution](execution.md) |

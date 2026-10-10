@@ -89,38 +89,33 @@ func (s RunSpec) environment(token string) []string {
 func Supervise(runDir string) int {
 	body, err := os.ReadFile(filepath.Join(runDir, "run.json"))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "read run.json:", err)
-		return 1
+		return failSupervise(runDir, "read run.json: "+err.Error())
 	}
 	var spec RunSpec
 	if err := json.Unmarshal(body, &spec); err != nil {
-		fmt.Fprintln(os.Stderr, "decode run.json:", err)
-		return 1
+		return failSupervise(runDir, "decode run.json: "+err.Error())
 	}
 	syscall.Setpgid(0, 0)
 	token := os.Getenv("SHEPHRD_RUN_TOKEN")
 	if token == "" {
 		if token, err = readToken(runDir); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
+			return failSupervise(runDir, err.Error())
 		}
 	}
 	self, err := proc.Of(os.Getpid())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "identify supervisor:", err)
-		return 1
+		return failSupervise(runDir, "identify supervisor: "+err.Error())
 	}
 	if err := spec.shephrd(token, "_started", "--pid", strconv.Itoa(self.PID), "--start", self.Start); err != nil {
-		fmt.Fprintln(os.Stderr, "record start:", err)
-		if writeErr := writeExitRecord(runDir, ExitRecord{Status: 1, Time: time.Now().UTC().Format(time.RFC3339)}); writeErr != nil {
-			fmt.Fprintln(os.Stderr, "write exit record:", writeErr)
-		}
-		return 1
+		return failSupervise(runDir, "record start: "+err.Error())
 	}
 	log, err := os.OpenFile(LogPath(runDir), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "open session log:", err)
-		return 1
+		return failSupervise(runDir, "open session log: "+err.Error())
+	}
+	if len(spec.Command) == 0 {
+		log.Close()
+		return failSupervise(runDir, "harness provider returned no command")
 	}
 	cmd := exec.Command(spec.Command[0], spec.Command[1:]...)
 	cmd.Dir = spec.Workspace
@@ -248,6 +243,14 @@ func (s RunSpec) endTurn(token string, harness *os.Process, done <-chan struct{}
 		}
 		return
 	}
+}
+
+func failSupervise(runDir, message string) int {
+	fmt.Fprintln(os.Stderr, message)
+	if err := writeExitRecord(runDir, ExitRecord{Status: 1, Time: time.Now().UTC().Format(time.RFC3339)}); err != nil {
+		fmt.Fprintln(os.Stderr, "write exit record:", err)
+	}
+	return 1
 }
 
 func writeExitRecord(runDir string, record ExitRecord) error {

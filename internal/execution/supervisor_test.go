@@ -31,6 +31,19 @@ func TestSupervisorRecordsExitWhenStartRegistrationFails(t *testing.T) {
 	}
 }
 
+func TestSupervisorRecordsExitForMalformedRun(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := Supervise(dir); status == 0 {
+		t.Fatal("supervisor succeeded after malformed run")
+	}
+	if _, ok := ReadExit(dir); !ok {
+		t.Fatal("supervisor did not write an exit record")
+	}
+}
+
 func TestTurnStatusRetriesTransientError(t *testing.T) {
 	dir := t.TempDir()
 	count := filepath.Join(dir, "count")

@@ -50,8 +50,9 @@ type (
 		Truncated bool   `json:"truncated"`
 	}
 	ExitResponse struct {
-		Record ExitRecord `json:"record"`
-		Found  bool       `json:"found"`
+		Record  ExitRecord `json:"record"`
+		Found   bool       `json:"found"`
+		Present bool       `json:"present"`
 	}
 	StopRequest struct {
 		PGID  int    `json:"pgid"`
@@ -209,8 +210,17 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, err
 		}
 		state := "unknown"
-		if req.PID > 0 && req.Start != "" && (proc.Identity{PID: req.PID, Start: req.Start}).Probe() == "live" && req.PGID == req.PID && proc.StopGroup(req.PGID, 5*time.Second) {
-			state = "exited"
+		if req.PID > 0 && req.Start != "" && req.PGID == req.PID {
+			switch (proc.Identity{PID: req.PID, Start: req.Start}).Probe() {
+			case "live":
+				if proc.StopGroup(req.PGID, 5*time.Second) {
+					state = "exited"
+				}
+			case "exited":
+				if !proc.GroupAlive(req.PGID) {
+					state = "exited"
+				}
+			}
 		}
 		return StateResponse{State: state}, nil
 	case "exit_record":
@@ -219,6 +229,7 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, err
 		}
 		record, found := ReadExit(req.RunDir)
+		_, presentErr := os.Stat(req.RunDir)
 		if !found {
 			body, _ := os.ReadFile(filepath.Join(req.RunDir, "run.json"))
 			var spec RunSpec
@@ -226,7 +237,7 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 				record.Session = codexSession(LogPath(req.RunDir))
 			}
 		}
-		return ExitResponse{Record: record, Found: found}, nil
+		return ExitResponse{Record: record, Found: found, Present: presentErr == nil}, nil
 	case "read_log":
 		req, err := decode[RunDirRequest](body)
 		if err != nil {

@@ -197,18 +197,22 @@ func (d *Daemon) observe(ctx context.Context, x *execution.Executor, cfg *config
 			limit = cfg.Timeouts.DriverInactivity.Duration
 		}
 		reason := ""
-		switch {
-		case t.Role == "worker" && r.TurnReported && idle >= turnGrace:
-			reason = "turn_ended"
-		case idle >= limit:
-			reason = "inactive"
-		}
-		if reason == "" && !r.TurnReported {
-			if host, err := x.Host(r.Host); err == nil {
-				var exit execution.ExitResponse
-				if host.Call(ctx, "exit_record", execution.RunDirRequest{RunDir: r.Dir}, &exit) == nil && exit.Found {
+		if host, err := x.Host(r.Host); err == nil {
+			var exit execution.ExitResponse
+			if host.Call(ctx, "exit_record", execution.RunDirRequest{RunDir: r.Dir}, &exit) == nil && exit.Found {
+				if r.TurnReported {
+					reason = "turn_ended"
+				} else {
 					reason = "no_report"
 				}
+			}
+		}
+		if reason == "" {
+			switch {
+			case t.Role == "worker" && r.TurnReported && idle >= turnGrace:
+				reason = "turn_ended"
+			case idle >= limit:
+				reason = "inactive"
 			}
 		}
 		if reason != "" {

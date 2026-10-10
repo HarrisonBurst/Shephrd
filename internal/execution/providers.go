@@ -57,19 +57,11 @@ func (x *Executor) Interrupt(ctx context.Context, r *coord.Run, reason string) e
 	r.StopReason = reason
 	if !x.stopGroup(ctx, r) {
 		return x.write(ctx, func(tx *store.Tx) error {
-			if err := coord.SetLiveness(tx, r, "unknown"); err != nil {
-				return err
-			}
 			t, err := coord.Load(tx, r.Task)
 			if err != nil {
 				return err
 			}
-			switch t.State {
-			case "running", "waiting":
-				return coord.Hold(tx, t, reason)
-			default:
-				return nil
-			}
+			return setUnknown(tx, r, t, reason)
 		})
 	}
 	session := x.stoppedSession(ctx, r)

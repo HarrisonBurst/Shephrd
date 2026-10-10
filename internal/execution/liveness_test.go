@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,9 +14,11 @@ import (
 )
 
 type livenessHost struct {
-	probe string
-	exit  ExitResponse
-	calls []string
+	probeErr     bool
+	probe        string
+	presentation string
+	exit         ExitResponse
+	calls        []string
 }
 
 func (h *livenessHost) Name() string { return "workhorse" }
@@ -24,9 +27,14 @@ func (h *livenessHost) Call(_ context.Context, op string, _, resp any) error {
 	h.calls = append(h.calls, op)
 	switch op {
 	case "probe":
+		if h.probeErr {
+			return errors.New("probe failed")
+		}
 		resp.(*StateResponse).State = h.probe
 	case "exit_record":
 		*resp.(*ExitResponse) = h.exit
+	case "presentation":
+		resp.(*PresentationResponse).State = h.presentation
 	case "stop":
 		resp.(*StateResponse).State = "exited"
 	}
@@ -201,5 +209,89 @@ func TestFailedInterruptPreservesUnknownLivenessOnClosedStates(t *testing.T) {
 				t.Fatalf("task: %+v, %v", currentTask, err)
 			}
 		})
+	}
+}
+
+func TestStopTreatsProvenExitedAsStopped(t *testing.T) {
+	host := &livenessHost{probe: "exited"}
+	db, x, task, run := livenessFixture(t, host, true, "running")
+	if _, err := x.Stop(context.Background(), task, "stopped"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	current, err := coord.LoadRun(db, run.ID)
+	if err != nil || current.Liveness != "exited" {
+		t.Fatalf("run: %+v, %v", current, err)
+	}
+}
+
+func TestInterruptTreatsProvenExitedAsStopped(t *testing.T) {
+	host := &livenessHost{probe: "exited"}
+	db, x, _, run := livenessFixture(t, host, true, "running")
+	if _, err := db.Exec(`UPDATE runs SET turn_reported = 1 WHERE id = ?`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run.TurnReported = true
+	if err := x.Interrupt(context.Background(), run, "turn_ended"); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	current, err := coord.LoadRun(db, run.ID)
+	if err != nil || current.Liveness != "exited" {
+		t.Fatalf("run: %+v, %v", current, err)
+	}
+}
+
+func TestStalePIDZeroExitRecordDoesNotOverrideRecordedIdentity(t *testing.T) {
+	host := &livenessHost{probe: "live", exit: ExitResponse{Found: true, Record: ExitRecord{Status: 1}}}
+	db, x, _, run := livenessFixture(t, host, false, "running")
+	if _, err := db.Exec(`UPDATE runs SET pid = ?, start_time = ?, liveness = 'live' WHERE id = ?`, 123, "start", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := x.Probe(context.Background(), run)
+	if err != nil || got != "live" {
+		t.Fatalf("probe: %s, %v", got, err)
+	}
+	current, err := coord.LoadRun(db, run.ID)
+	if err != nil || current.Liveness != "live" || current.PID != 123 {
+		t.Fatalf("run: %+v, %v", current, err)
+	}
+}
+
+func TestAbandonUnstartedPresentationRun(t *testing.T) {
+	host := &livenessHost{presentation: "absent", exit: ExitResponse{Present: true}}
+	db, x, task, run := livenessFixture(t, host, false, "running")
+	if _, err := db.Exec(`UPDATE runs SET liveness = 'unknown', endpoint = ? WHERE id = ?`, "ep", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET state = 'held', reason = 'start_failed' WHERE id = ?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	run.Liveness, run.Endpoint = "unknown", "ep"
+	if _, err := x.Abandon(context.Background(), task); err != nil {
+		t.Fatalf("abandon: %v", err)
+	}
+	current, err := coord.LoadRun(db, run.ID)
+	if err != nil || current.Liveness != "exited" || current.StopReason != "abandoned" {
+		t.Fatalf("run: %+v, %v", current, err)
+	}
+	currentTask, err := coord.Load(db, task.ID)
+	if err != nil || currentTask.State != "held" {
+		t.Fatalf("task: %+v, %v", currentTask, err)
+	}
+}
+
+func TestHostUnknownDoesNotWakeDoneTask(t *testing.T) {
+	host := &livenessHost{probeErr: true}
+	db, x, task, run := livenessFixture(t, host, true, "done")
+	got, err := x.Probe(context.Background(), run)
+	if err != nil || got != "unknown" {
+		t.Fatalf("probe: %s, %v", got, err)
+	}
+	currentTask, err := coord.Load(db, task.ID)
+	if err != nil || currentTask.State != "done" {
+		t.Fatalf("task: %+v, %v", currentTask, err)
+	}
+	items, err := coord.Items(db, `i.state = 'pending'`)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("unexpected owner notification: %v, %v", items, err)
 	}
 }

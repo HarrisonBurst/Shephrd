@@ -334,20 +334,29 @@ func SetLiveness(tx *store.Tx, r *Run, liveness string) error {
 	if _, err := tx.Exec(`UPDATE runs SET liveness = ? WHERE id = ?`, liveness, r.ID); err != nil {
 		return err
 	}
-	seq, err := tx.Emit("run.liveness", "system", r.Task, r.Attempt, r.ID, map[string]string{"run": strconv.FormatInt(r.Generation, 10), "from": from, "to": liveness})
+	_, err := tx.Emit("run.liveness", "system", r.Task, r.Attempt, r.ID, map[string]string{"run": strconv.FormatInt(r.Generation, 10), "from": from, "to": liveness})
+	return err
+}
+
+func SetLivenessAndWake(tx *store.Tx, r *Run, liveness string) error {
+	if r.Liveness == liveness {
+		return nil
+	}
+	if err := SetLiveness(tx, r, liveness); err != nil {
+		return err
+	}
+	if liveness != "unknown" {
+		return nil
+	}
+	var seq int64
+	if err := tx.QueryRow(`SELECT seq FROM events WHERE task = ? AND attempt = ? AND run = ? AND name = 'run.liveness' ORDER BY seq DESC LIMIT 1`, r.Task, r.Attempt, r.ID).Scan(&seq); err != nil {
+		return err
+	}
+	t, err := Load(tx, r.Task)
 	if err != nil {
 		return err
 	}
-	if liveness == "unknown" {
-		t, err := Load(tx, r.Task)
-		if err != nil {
-			return err
-		}
-		if t.State != "running" && t.State != "waiting" {
-			return WakeOwner(tx, t, seq)
-		}
-	}
-	return nil
+	return WakeOwner(tx, t, seq)
 }
 
 // RecordExit marks a run exited and applies what its exit means. It

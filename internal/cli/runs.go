@@ -93,9 +93,10 @@ func taskRun(a *app, purpose string) *cobra.Command {
 }
 
 func taskStop(a *app) *cobra.Command {
-	var tree bool
+	var tree, abandon bool
 	cmd := &cobra.Command{Use: "stop <task>", Short: "Stop a task's current run, or with --tree its whole subtree", Args: cobra.ExactArgs(1)}
 	cmd.Flags().BoolVar(&tree, "tree", false, "stop every running task in the subtree")
+	cmd.Flags().BoolVar(&abandon, "abandon", false, "recover a PID-less unknown presentation run after its endpoint is absent")
 	cmd.RunE = a.run(func(_ *cobra.Command, args []string) (any, error) {
 		caller, db, t, err := a.readTask(args[0])
 		if err != nil {
@@ -110,6 +111,16 @@ func taskStop(a *app) *cobra.Command {
 			x, err := a.executor()
 			if err != nil {
 				return nil, err
+			}
+			if abandon {
+				if tree {
+					return nil, fault.New("usage", "--abandon cannot be combined with --tree")
+				}
+				run, err := x.Abandon(a.ctx, t)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"task": t.Ref, "run": run.Generation, "abandoned": true}, nil
 			}
 			targets := []*coord.Task{t}
 			if tree {

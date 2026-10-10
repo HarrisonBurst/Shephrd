@@ -75,7 +75,7 @@ extend = "/path/to/house-rules.md"
 
 ### Receive results
 
-Results, questions and held tasks reach the main driver's inbox. Read each report and any referenced artifacts, share the findings with the user, then acknowledge the item. Check `shephrd task show` before calling work complete: a reused sub-driver is done only after all requests are answered. Deliver report or answer tasks without a grant; code delivery needs `land`, and code in pull-request mode stays done until the pull request merges. To have inbox items pushed, configure a delivery for the driver:
+Results, questions and held tasks reach the main driver's inbox. Read each report and any referenced artifacts, share the findings with the user, then acknowledge the item. Check `shephrd task show` before calling work complete: a reused sub-driver is done only after all requests are answered. Deliver report or answer tasks without a grant; code delivery needs `land` and the user's explicit approval, and code in pull-request mode stays done until the pull request merges. To have inbox items pushed, configure a delivery for the driver:
 
 ```toml
 [drivers.main.delivery]
