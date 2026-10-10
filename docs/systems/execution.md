@@ -129,7 +129,7 @@ This is a guard rail, not a security boundary: it turns an accidental implementa
 
 The supervisor writes the harness exit record before it exits; it cannot report its own process as exited while it still runs. The daemon or explicit reconciliation probes the recorded supervisor identity and process group through the host agent and applies the exit record only after both are proven gone. If startup never records a supervisor identity, a durable exit record proves that supervisor's exit; otherwise the bounded startup observation changes the run to `unknown` and holds the task for recovery without inferring an absent process or endpoint. An uncertain identity or live group stays unknown, not exited; a host outage retains recoverable state. If the supervisor identity is gone while a group member remains, the group is not treated as owned and execution does not signal it; the run stays unknown and the task is held with an owner notification. Stopping records `exited` only after the group is confirmed gone. A stop requested before `_started` refuses `_started`, so it cannot launch a harness after the stop. Only proven `exited` lets coordination resume, retry or release.
 
-Stopping sends a termination signal to the run's whole process group only while the recorded supervisor identity still proves ownership, waits a bounded grace period, then kills it. The run counts as stopped only once the host agent confirms the group is reaped. If ownership or reaping cannot be confirmed, the run is `unknown`; the task is held only from `running` or `waiting`, while a `done` or `closed` task remains in that state with an owner notification, and nothing that needs the run gone proceeds. A stop never removes the workspace.
+Stopping sends a termination signal to the run's whole process group only while the recorded supervisor identity still proves ownership, waits a bounded grace period, then kills it. The run counts as stopped only once the host agent confirms the group is reaped. If ownership or reaping cannot be confirmed, the run is `unknown`; the task is held only from `running` or `waiting`, while a `done` or `closed` task remains in that state with an owner notification, and nothing that needs the run gone proceeds. A PID-less unknown presentation run whose shell never execed the supervisor can be recovered only with explicit `task stop --abandon`, after the host confirms the recorded endpoint is absent and the run directory still exists without an exit record. Abandonment records the run exited but leaves the task and workspace held; it is unavailable without a presentation endpoint and is not proof from an ordinary endpoint observation. A normal stop never removes the workspace.
 
 ## Reconciliation
 
@@ -150,7 +150,7 @@ The task's target names the harness and an opaque model string. Execution passes
 | Command | Effect |
 |---|---|
 | `task start`, `task resume`, `task retry` | Start a run on a new attempt, the same attempt or a new attempt, after coordination's checks |
-| `task stop` | Stop the current run, optionally for a whole subtree |
+| `task stop` | Stop the current run, optionally for a whole subtree; `--abandon` explicitly recovers an unstarted presentation run |
 | `task log` | Read the current or a named run's session log |
 | `workspace reconcile` | Classify interrupted effects on every host |
 | `host list` | Configured hosts with reachability, version and installed providers |
@@ -166,6 +166,7 @@ The task's target names the harness and an opaque model string. Execution passes
 | Base cannot be resolved or has diverged | Workspace creation refused; the task stays as it was. |
 | Setup command fails | Workspace stays `held`; the task is `held` with reason `setup_failed`. |
 | Harness fails to start | Task `held` with reason `start_failed`; the workspace stays `held`. |
+| Supervisor shell never execs | The PID-less run becomes `unknown` after the startup grace; explicit `task stop --abandon` is the only recovery, and it leaves the task and workspace held. |
 | Run exits without reporting | One nudge, then task `held` with reason `no_report`. |
 | Run reports nothing for its inactivity timeout | Stopped, one nudge, then task `held` with reason `inactive`. |
 | Process group cannot be confirmed reaped | Run `unknown`; nothing that needs it gone proceeds. |
