@@ -4,7 +4,7 @@ Shephrd is a local CLI control plane for delegating repository work from a user-
 
 Licensed under the [MIT License](LICENSE).
 
-Start with the [documentation overview](docs/README.md) for the end-to-end lifecycle, component map, and command-family guide. Detailed behavior is organized by component under [`docs/components/`](docs/components/), with the authority split in the [authority map](docs/reference/authority.md).
+Start with the [documentation overview](docs/archive/README.md) for the end-to-end lifecycle, component map, and command-family guide. Detailed behavior is organized by component under [`docs/archive/components/`](docs/archive/components/), with the authority split in the [authority map](docs/archive/reference/authority.md).
 
 ## Supported platforms
 
@@ -56,7 +56,7 @@ shephrd subdriver recover <subdriver-id> --generation <inspected-generation> --j
 shephrd subdriver resume <subdriver-id> --json
 ```
 
-Uncertain process or endpoint absence is not permission to recover. See [sub-driver recovery](docs/components/subdrivers.md#restart-and-recovery) for the exact identity and absence requirements.
+Uncertain process or endpoint absence is not permission to recover. See [sub-driver recovery](docs/archive/components/subdrivers.md#restart-and-recovery) for the exact identity and absence requirements.
 
 ## Minimal flow
 
@@ -74,7 +74,7 @@ shephrd task create \
 shephrd worker spawn <task-id> --json
 ```
 
-For explicitly requested [repository coordination](docs/components/subdrivers.md), forward original intake with `shephrd subdriver handoff --repo example --key request-001 --request-file request.txt --json`. A durable scoped owner, shown in terminals and watcher notices as `Sub-driver: <registered repository>` or `Sub-driver: General`, plans and supervises ordinary workers in bounded, replaceable sessions. Coordination is opt-in; existing direct-driver commands remain available.
+For explicitly requested [repository coordination](docs/archive/components/subdrivers.md), forward original intake with `shephrd subdriver handoff --repo example --key request-001 --request-file request.txt --json`. A durable scoped owner, shown in terminals and watcher notices as `Sub-driver: <registered repository>` or `Sub-driver: General`, plans and supervises ordinary workers in bounded, replaceable sessions. Coordination is opt-in; existing direct-driver commands remain available.
 
 Shephrd never automatically merges, retries or relaunches workers, dispatches planned work, escalates a model, or discards unlanded work. Git worktrees isolate Git state but do not sandbox worker processes. Register only trusted repositories and setup hooks.
 
@@ -101,4 +101,4 @@ make build-freshness
 
 The diagnostic only inspects the selected executable and its containing Git checkout. It does not load Shephrd configuration or state, rebuild Shephrd, or run lifecycle services.
 
-Repository contributors and workers follow [AGENTS.md](AGENTS.md). The portable [Shephrd skill](.agents/skills/shephrd/SKILL.md) covers basic execution and lifecycle safety, with [driver guidance](.agents/skills/shephrd/references/driver-policy.md) and detailed mechanics available on demand. Drivers delegate substantive repository work by default, including small tasks, with proportionate investigation and answers. Conversation, answers supported by available context, coordination and lifecycle operations, and explicitly requested direct work can remain direct. Review, PR creation, model choices, decomposition, successor work, and recursive delegation are not automatic. See [repository context, memory, and workflow modules](docs/reference/workflow-modules.md) for the optional Markdown organization and reusable playbooks. The [repository context](.shephrd/context.md) provides a lean overview; optional project memory is local and excluded from this public snapshot. `shephrd repo context <path> --json` discovers this entry point without changing AGENTS.md. Agent-maintained memory is enabled by default; set `[memory] enabled = false` in Shephrd configuration to disable automatic recall and writes. No background indexer or workflow engine is involved.
+Repository contributors and workers follow [AGENTS.md](AGENTS.md). The portable [Shephrd skill](.agents/skills/shephrd/SKILL.md) covers basic execution and lifecycle safety, with [driver guidance](.agents/skills/shephrd/references/driver-policy.md) and detailed mechanics available on demand. Drivers delegate substantive repository work by default, including small tasks, with proportionate investigation and answers. Conversation, answers supported by available context, coordination and lifecycle operations, and explicitly requested direct work can remain direct. Review, PR creation, model choices, decomposition, successor work, and recursive delegation are not automatic. See [repository context, memory, and workflow modules](docs/archive/reference/workflow-modules.md) for the optional Markdown organization and reusable playbooks. The [repository context](.shephrd/context.md) provides a lean overview; optional project memory is local and excluded from this public snapshot. `shephrd repo context <path> --json` discovers this entry point without changing AGENTS.md. Agent-maintained memory is enabled by default; set `[memory] enabled = false` in Shephrd configuration to disable automatic recall and writes. No background indexer or workflow engine is involved.

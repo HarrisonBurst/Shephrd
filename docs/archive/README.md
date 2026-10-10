@@ -4,7 +4,7 @@ Shephrd is a local control plane for delegating repository work from a user-faci
 
 Shephrd supports macOS and Linux and requires a POSIX environment.
 
-This page is the concise lifecycle and command map. Detailed guides live under [`components/`](components/), and shared reference material lives under [`reference/`](reference/). The base guidance prefers worker delegation for substantive repository work, including small tasks, while keeping investigation and answers proportionate. Conversation, context-supported answers, coordination and lifecycle operations, and explicitly requested direct work can remain direct. Task decomposition, independent review, PR creation, model-family choices, successor work, and recursive delegation are not automatic.
+This page is the concise lifecycle and command map. The proposed high-level principles and system overview are in the [system design proposal](../design.md). Detailed guides live under [`components/`](components/), and shared reference material lives under [`reference/`](reference/). The base guidance prefers worker delegation for substantive repository work, including small tasks, while keeping investigation and answers proportionate. Conversation, context-supported answers, coordination and lifecycle operations, and explicitly requested direct work can remain direct. Task decomposition, independent review, PR creation, model-family choices, successor work, and recursive delegation are not automatic.
 
 ## End-to-end lifecycle
 
