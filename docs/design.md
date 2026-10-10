@@ -82,6 +82,7 @@ Each system has its own spec:
 - [Command surface and SSH parity](systems/commands.md) (approved)
 - [Plugins and extensibility](systems/extensibility.md) (approved)
 - [Session execution](systems/execution.md) (approved)
+- [Notification and result flow](systems/notifications.md) (approved)
 
 Later specs decide, for each system, its data model, command and protocol shape, transport and trust details and recovery behavior. Every system spec also has an **Extensibility** section defining its events, intercept points, providers and limits on plugins, as described in [what each system spec defines](systems/extensibility.md#what-each-system-spec-defines). This proposal only fixes the responsibilities, principles and boundaries those specs must respect.
 

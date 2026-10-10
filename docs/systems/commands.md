@@ -146,8 +146,8 @@ Provisional. Rows owned by later specs are placeholders for those specs to final
 | `task send` | Message or reply to a task | Coordination, notification |
 | `task cancel`, `task adopt`, `task note` | Cancel, adopt a root, record a note | Coordination |
 | `task data set` | Write the caller's plugin data namespace on a task | Coordination |
-| `report` | A run reports progress, a question, a result or a blocker | Notification |
-| `inbox` | An owner waits for, reads and acknowledges events | Notification |
+| `report progress`, `question`, `result`, `blocker`, `note` | A run reports on its task | Notification |
+| `inbox`, `inbox wait`, `inbox ack` | A driver reads, waits for and acknowledges items needing attention | Notification |
 | `task land`, `task discard`, `grant` | Irreversible actions and their authority | Artifacts and authority |
 | `workspace reconcile` | Classify interrupted effects on every host | Session execution |
 | `host list` | Hosts with reachability, version and installed providers | Session execution |

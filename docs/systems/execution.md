@@ -76,7 +76,7 @@ A run is one turn of one session. It starts, works until it reports a result, qu
 
 ### Continuation
 
-When a waiting or done task receives a message, or a driver task's children report, [notification and result flow](../design.md#system-responsibilities) asks execution for a new run of the same attempt. Every new run resumes the task's native harness session:
+When a waiting or done task receives a message, or a driver task's children report, [notification and result flow](notifications.md) asks execution for a new run of the same attempt. Every new run resumes the task's native harness session:
 
 - **A worker** resumes its own session, keeping its working memory of the change it is making.
 - **A sub-driver** is one continuous session for its repository. Every turn resumes it, so it keeps context across all its requests and workers. A turn handles everything new since the last one, across all requests at once, and its brief always includes the overview of open requests and children, so it stays oriented after the harness compacts its context.
