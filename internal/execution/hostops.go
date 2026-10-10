@@ -83,6 +83,14 @@ type (
 	StateResponse struct {
 		State string `json:"state"`
 	}
+	PushRequest struct {
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
+		Commit string `json:"commit"`
+	}
+	PushResponse struct {
+		Remote string `json:"remote"`
+	}
 )
 
 func decode[T any](body []byte) (T, error) {
@@ -240,6 +248,29 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, err
 		}
 		return LandDirect(req, filepath.Join(env.DataDir, "scratch"))
+	case "remote_url":
+		req, err := decode[PushRequest](body)
+		if err != nil {
+			return nil, err
+		}
+		remote, err := gitcmd.Run(req.Repo, "remote", "get-url", "origin")
+		if err != nil {
+			return nil, fault.New("landing_failed", "repository %s has no origin", req.Repo)
+		}
+		return PushResponse{Remote: remote}, nil
+	case "push_branch":
+		req, err := decode[PushRequest](body)
+		if err != nil {
+			return nil, err
+		}
+		remote, err := gitcmd.Run(req.Repo, "remote", "get-url", "origin")
+		if err != nil {
+			return nil, fault.New("landing_failed", "repository %s has no origin to push to", req.Repo)
+		}
+		if _, err := gitcmd.Run(req.Repo, "push", "--quiet", "--force", "origin", req.Commit+":refs/heads/"+req.Branch); err != nil {
+			return nil, fault.New("landing_failed", "push %s: %v", req.Branch, err)
+		}
+		return PushResponse{Remote: remote}, nil
 	case "prove_ancestry":
 		req, err := decode[AncestryRequest](body)
 		if err != nil {

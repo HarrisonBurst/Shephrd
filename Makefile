@@ -1,8 +1,11 @@
-.PHONY: build install test test-docs vet
+.PHONY: build plugins install test test-docs vet
 
 build:
 	go build -o bin/shephrd.tmp ./cmd/shephrd
 	mv bin/shephrd.tmp bin/shephrd
+
+plugins:
+	go build -o plugins/github/bin/shephrd-github ./plugins/github
 
 install:
 	go install ./cmd/shephrd

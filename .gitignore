@@ -1,4 +1,5 @@
 /bin/
+/plugins/*/bin/
 /shephrd
 /.lavish/
 /.shephrd/memory.md

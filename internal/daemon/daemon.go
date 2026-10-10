@@ -125,6 +125,7 @@ func (d *Daemon) pass(ctx context.Context) {
 		return
 	}
 	x.Inputs = artifact.Inputs(d.db, &cfg, x.Host)
+	x.Base = artifact.StackBase(d.db, &cfg)
 	if err := d.pluginsChanged(ctx, reg); err != nil {
 		d.logf("plugins: %v", err)
 	}

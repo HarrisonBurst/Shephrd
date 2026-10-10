@@ -33,6 +33,7 @@ func (a *app) executor() (*execution.Executor, error) {
 		return nil, err
 	}
 	x.Inputs = artifact.Inputs(db, cfg, x.Host)
+	x.Base = artifact.StackBase(db, cfg)
 	return x, nil
 }
 
@@ -231,6 +232,9 @@ func reportCommand(a *app) *cobra.Command {
 				out := map[string]any{"task": t.Ref, "kind": kind}
 				if sealed != nil {
 					if err := artifact.Record(tx, caller, t, sealed); err != nil {
+						return nil, err
+					}
+					if err := artifact.Sealed(tx, caller, t, sealed); err != nil {
 						return nil, err
 					}
 					report.Extra = map[string]any{"artifact": sealed.Ref}
