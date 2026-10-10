@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -165,8 +166,19 @@ type Event struct {
 }
 
 func (s *Store) Events(ctx context.Context, after int64, limit int) ([]Event, error) {
+	return s.events(ctx, `WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
+}
+
+// TaskEvents returns a task's latest events, oldest first.
+func (s *Store) TaskEvents(ctx context.Context, task int64, limit int) ([]Event, error) {
+	events, err := s.events(ctx, `WHERE task = ? ORDER BY seq DESC LIMIT ?`, task, limit)
+	slices.Reverse(events)
+	return events, err
+}
+
+func (s *Store) events(ctx context.Context, where string, args ...any) ([]Event, error) {
 	rows, err := s.QueryContext(ctx, `SELECT seq, name, time, COALESCE(task, 0), COALESCE(attempt, 0), COALESCE(run, 0), caller, data
-		FROM events WHERE seq > ? ORDER BY seq LIMIT ?`, after, limit)
+		FROM events `+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +199,9 @@ func (s *Store) Events(ctx context.Context, after int64, limit int) ([]Event, er
 	return events, rows.Err()
 }
 
+// Timestamp is fixed width, so stored times compare correctly as text.
 func Timestamp(t time.Time) string {
-	return t.UTC().Format(time.RFC3339Nano)
+	return t.UTC().Format("2006-01-02T15:04:05.000000000Z")
 }
 
 func nullable(id int64) any {

@@ -21,9 +21,24 @@ type Config struct {
 	MaxDepth  int                     `toml:"max_depth"`
 	Store     string                  `toml:"store"`
 	DataDir   string                  `toml:"data_dir"`
+	Defaults  Target                  `toml:"defaults"`
+	Routes    []Route                 `toml:"routes"`
 	Packages  map[string]Package      `toml:"packages"`
 	Plugins   map[string]PluginConfig `toml:"plugins"`
 	Providers map[string]string       `toml:"providers"`
+}
+
+type Target struct {
+	Host    string `toml:"host" json:"host"`
+	Harness string `toml:"harness" json:"harness"`
+	Model   string `toml:"model" json:"model,omitempty"`
+}
+
+type Route struct {
+	Role    string `toml:"role"`
+	Repo    string `toml:"repo"`
+	Harness string `toml:"harness"`
+	Model   string `toml:"model"`
 }
 
 type Package struct {
@@ -68,11 +83,14 @@ func Load(getenv Getenv) (Config, error) {
 	if err != nil {
 		return Config{}, fault.New("invalid_config", "%s: %v", path, err)
 	}
-	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		keys := make([]string, len(undecoded))
-		for i, key := range undecoded {
-			keys[i] = key.String()
+	var keys []string
+	for _, key := range md.Undecoded() {
+		if len(key) > 2 && key[0] == "plugins" && key[2] == "options" {
+			continue
 		}
+		keys = append(keys, key.String())
+	}
+	if len(keys) > 0 {
 		sort.Strings(keys)
 		return Config{}, fault.New("invalid_config", "%s: unknown keys %s", path, strings.Join(keys, ", "))
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"shephrd/internal/config"
+	"shephrd/internal/coord"
 	"shephrd/internal/fault"
 	"shephrd/internal/store"
 )
@@ -20,18 +21,7 @@ type Origin struct {
 	As    string
 }
 
-type Caller struct {
-	Kind     string `json:"kind"`
-	Name     string `json:"name,omitempty"`
-	Operator bool   `json:"operator"`
-}
-
-func (c Caller) String() string {
-	if c.Name == "" {
-		return c.Kind
-	}
-	return c.Kind + ":" + c.Name
-}
+type Caller = coord.Caller
 
 func (a *app) identity() (Caller, error) {
 	if a.caller != nil {

@@ -236,7 +236,7 @@ func (a *app) mutate(fn func(tx *store.Tx, caller Caller) (any, error)) (any, er
 	digest := sha256.New()
 	json.NewEncoder(digest).Encode(a.req.Argv)
 	digest.Write(a.stdin)
-	return db.Mutate(a.ctx, caller.String(), a.req.Key, hex.EncodeToString(digest.Sum(nil)), func(tx *store.Tx) (any, error) {
+	return db.Mutate(a.ctx, caller.Scope(), a.req.Key, hex.EncodeToString(digest.Sum(nil)), func(tx *store.Tx) (any, error) {
 		return fn(tx, caller)
 	})
 }
