@@ -8,7 +8,7 @@ Durable coordination is the single authority for delegated work: who asked for i
 
 **Owns:** identity and ownership, repositories, tasks and the delegation tree, dependencies, attempts, runs, the task event log and idempotency records.
 
-**Does not own:** how sessions start or how liveness is observed ([session execution](../design.md#system-responsibilities)), how events reach their owner and are acknowledged (notification and result flow), what makes a result valid or a landing proven, and authority grants (artifacts and authority), command and transport conventions ([command surface](commands.md)), or the plugin mechanism itself ([plugins and extensibility](extensibility.md)).
+**Does not own:** how sessions start or how liveness is observed ([session execution](execution.md)), how events reach their owner and are acknowledged (notification and result flow), what makes a result valid or a landing proven, and authority grants (artifacts and authority), command and transport conventions ([command surface](commands.md)), or the plugin mechanism itself ([plugins and extensibility](extensibility.md)).
 
 ## Model
 

@@ -125,7 +125,7 @@ host = "laptop"
 home = "me@workhorse"
 ```
 
-On `workhorse`, `authorized_keys` pins each caller: `hermes`'s key to `shephrd serve --as driver:main`, and `laptop`'s key to `shephrd serve --host laptop`.
+On `workhorse`, `authorized_keys` pins each caller: `hermes`'s key to `shephrd serve --as driver:main`, and `laptop`'s key to `shephrd serve --host laptop`. On `laptop`, `workhorse`'s key is pinned to `shephrd agent`, so the home host can run [host operations](execution.md#hosts) there.
 
 Paths for the store, workspaces and data have defaults and are set only when needed.
 
@@ -142,13 +142,15 @@ Provisional. Rows owned by later specs are placeholders for those specs to final
 | `task create` | Create a root task, or a child task from a driver run | Coordination |
 | `task show`, `task list` | Read a task with its children and log, or list a subtree | Coordination |
 | `task start`, `stop`, `resume`, `retry` | Start a run, stop, new run on the same attempt, new attempt | Coordination, session execution |
+| `task log` | Read a run's session log | Session execution |
 | `task send` | Message or reply to a task | Coordination, notification |
 | `task cancel`, `task adopt`, `task note` | Cancel, adopt a root, record a note | Coordination |
 | `task data set` | Write the caller's plugin data namespace on a task | Coordination |
 | `report` | A run reports progress, a question, a result or a blocker | Notification |
 | `inbox` | An owner waits for, reads and acknowledges events | Notification |
 | `task land`, `task discard`, `grant` | Irreversible actions and their authority | Artifacts and authority |
-| `workspace` | Reconcile and release workspaces | Session execution |
+| `workspace reconcile` | Classify interrupted effects on every host | Session execution |
+| `host list` | Hosts with reachability, version and installed providers | Session execution |
 | `events` | Read or follow the public event stream from a cursor | Plugins and extensibility |
 | `daemon` | Deliver events to plugins and owners on the home host | Plugins and extensibility |
 | `plugin sync`, `list`, `status`, `skill` | Fetch declared packages, and inspect declared plugins | Plugins and extensibility |
