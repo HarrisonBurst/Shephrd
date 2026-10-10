@@ -163,33 +163,45 @@ func handle(req request) (map[string]string, error) {
 		encoded, _ := json.Marshal(at)
 		return map[string]string{"endpoint": string(encoded)}, nil
 	case "probe":
-		out, code, err := herdr("pane", "get", at.Pane)
-		switch {
-		case err == nil:
-			var found struct {
-				Result struct {
-					Pane struct {
-						Tab  string `json:"tab_id"`
-						Pane string `json:"pane_id"`
-					} `json:"pane"`
-				} `json:"result"`
-			}
-			if json.Unmarshal(out, &found) == nil && found.Result.Pane.Pane == at.Pane && found.Result.Pane.Tab == at.Tab && at.Tab != "" {
-				return map[string]string{"state": "present"}, nil
-			}
-			return map[string]string{"state": "uncertain"}, nil
-		case strings.HasSuffix(code, "_not_found"):
-			return map[string]string{"state": "absent"}, nil
-		}
-		return map[string]string{"state": "uncertain"}, nil
+		return map[string]string{"state": paneState(at)}, nil
 	case "close":
-		if _, code, err := herdr("pane", "close", at.Pane); err != nil && !strings.HasSuffix(code, "_not_found") {
-			return nil, err
+		switch paneState(at) {
+		case "absent":
+			return map[string]string{}, nil
+		case "present":
+			if _, code, err := herdr("pane", "close", at.Pane); err != nil && !strings.HasSuffix(code, "_not_found") {
+				return nil, err
+			}
+			return map[string]string{}, nil
 		}
-		return map[string]string{}, nil
+		return nil, fmt.Errorf("pane %s ownership is uncertain", at.Pane)
 	case "focus":
 		_, _, err := herdr("tab", "focus", at.Tab)
 		return map[string]string{}, err
 	}
 	return nil, fmt.Errorf("unknown presentation operation %q", req.Body.Operation)
+}
+
+func paneState(at endpoint) string {
+	if at.Tab == "" || at.Pane == "" {
+		return "uncertain"
+	}
+	out, code, err := herdr("pane", "get", at.Pane)
+	switch {
+	case err == nil:
+		var found struct {
+			Result struct {
+				Pane struct {
+					Tab  string `json:"tab_id"`
+					Pane string `json:"pane_id"`
+				} `json:"pane"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(out, &found) == nil && found.Result.Pane.Pane == at.Pane && found.Result.Pane.Tab == at.Tab && at.Tab != "" {
+			return "present"
+		}
+	case strings.HasSuffix(code, "_not_found"):
+		return "absent"
+	}
+	return "uncertain"
 }

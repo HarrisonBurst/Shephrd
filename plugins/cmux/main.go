@@ -95,27 +95,70 @@ func handle(req request) (map[string]string, error) {
 		encoded, _ := json.Marshal(at)
 		return map[string]string{"endpoint": string(encoded)}, nil
 	case "probe":
-		out, err := cmux("tree", "--workspace", at.Workspace, "--window", at.Window)
-		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "not found") {
-				return map[string]string{"state": "absent"}, nil
-			}
-			return map[string]string{"state": "uncertain"}, nil
-		}
-		if strings.Contains(string(out), at.Workspace) && strings.Contains(string(out), at.Surface) && at.Surface != "" {
-			return map[string]string{"state": "present"}, nil
-		}
-		return map[string]string{"state": "uncertain"}, nil
+		return map[string]string{"state": workspaceState(at)}, nil
 	case "close":
-		if _, err := cmux("workspace", "close", at.Workspace, "--window", at.Window); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
-			return nil, err
+		switch workspaceState(at) {
+		case "absent":
+			return map[string]string{}, nil
+		case "present":
+			if _, err := cmux("workspace", "close", at.Workspace, "--window", at.Window); err != nil && !strings.Contains(strings.ToLower(err.Error()), "not found") {
+				return nil, err
+			}
+			return map[string]string{}, nil
 		}
-		return map[string]string{}, nil
+		return nil, fmt.Errorf("workspace %s ownership is uncertain", at.Workspace)
 	case "focus":
 		_, err := cmux("workspace", "select", at.Workspace, "--window", at.Window)
 		return map[string]string{}, err
 	}
 	return nil, fmt.Errorf("unknown presentation operation %q", req.Body.Operation)
+}
+
+func workspaceState(at endpoint) string {
+	if at.Window == "" || at.Workspace == "" || at.Surface == "" {
+		return "uncertain"
+	}
+	out, err := cmux("tree", "--workspace", at.Workspace, "--window", at.Window)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			return "absent"
+		}
+		return "uncertain"
+	}
+	var tree struct {
+		Windows []struct {
+			ID         string `json:"id"`
+			Workspaces []struct {
+				ID    string `json:"id"`
+				Panes []struct {
+					Surfaces []struct {
+						ID string `json:"id"`
+					} `json:"surfaces"`
+				} `json:"panes"`
+			} `json:"workspaces"`
+		} `json:"windows"`
+	}
+	if json.Unmarshal(out, &tree) != nil {
+		return "uncertain"
+	}
+	for _, win := range tree.Windows {
+		if win.ID != at.Window {
+			continue
+		}
+		for _, ws := range win.Workspaces {
+			if ws.ID != at.Workspace {
+				continue
+			}
+			for _, pane := range ws.Panes {
+				for _, surface := range pane.Surfaces {
+					if surface.ID == at.Surface {
+						return "present"
+					}
+				}
+			}
+		}
+	}
+	return "uncertain"
 }
 
 // run types a command into a surface's shell and presses enter.

@@ -75,6 +75,10 @@ func main() {
 	case "pane get":
 		p := find(args[2])
 		fmt.Printf(`{"result":{"pane":{"pane_id":%q,"tab_id":%q}}}`+"\n", p.ID, p.Tab)
+		if os.Remove(filepath.Join(dir, "swap-tab-after-get")) == nil {
+			p.Tab = "other"
+			save(panes)
+		}
 	case "pane close":
 		p := find(args[2])
 		if p.PID > 0 {

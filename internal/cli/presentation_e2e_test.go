@@ -159,6 +159,20 @@ func TestUncertainEndpointIsNotClosed(t *testing.T) {
 	panes[0]["tab_id"] = "t1"
 	body, _ = json.Marshal(panes)
 	os.WriteFile(path, body, 0o600)
+	marker := filepath.Join(env.Home, ".fakeherdr", "swap-tab-after-get")
+	os.WriteFile(marker, nil, 0o600)
+	env.Eventually("the pane to change owners after the core probe", func() bool {
+		env.OK("workspace", "reconcile")
+		_, err := os.Stat(marker)
+		return os.IsNotExist(err)
+	})
+	if panes := herdrPanes(env); panes[0]["closed"] == true {
+		t.Fatalf("closed a pane whose owner changed between probe and close: %v", panes)
+	}
+	panes = herdrPanes(env)
+	panes[0]["tab_id"] = "t1"
+	body, _ = json.Marshal(panes)
+	os.WriteFile(path, body, 0o600)
 	env.Eventually("the terminal to close after the endpoint can be probed", func() bool {
 		env.OK("workspace", "reconcile")
 		return herdrPanes(env)[0]["closed"] == true
