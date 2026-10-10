@@ -132,7 +132,7 @@ func TestRunWithoutReportGetsOneNudgeThenIsHeld(t *testing.T) {
 
 func TestNudgedRunCanStillFinish(t *testing.T) {
 	env, _ := withHarness(t)
-	env.Script(map[string][][]action{"t_1": {{}, {{"report": []string{"result", "Done after the nudge"}}}}})
+	env.Script(map[string][][]action{"t_1": {{}, {{"work": "Fix"}, {"report": []string{"result", "Done after the nudge"}}}}})
 	env.OK("task", "create", "--repo", "api", "--objective", "Work")
 	env.OK("task", "start", "t_1")
 	env.WaitState("t_1", "done")
@@ -140,7 +140,7 @@ func TestNudgedRunCanStillFinish(t *testing.T) {
 
 func TestStopConfirmsAndStaleRunInputIsRefused(t *testing.T) {
 	env, _ := withHarness(t)
-	env.Script(map[string][][]action{"t_1": {{{"report": []string{"progress", "starting"}}, {"sleep": "60s"}}, {{"report": []string{"result", "resumed"}}}}})
+	env.Script(map[string][][]action{"t_1": {{{"report": []string{"progress", "starting"}}, {"sleep": "60s"}}, {{"work": "Fix"}, {"report": []string{"result", "resumed"}}}}})
 	env.OK("task", "create", "--repo", "api", "--objective", "Work")
 	first := env.OK("task", "start", "t_1")
 	env.Eventually("first progress", func() bool { return len(callsFor(env, "t_1", 0)) == 1 && len(env.Calls()) >= 2 })

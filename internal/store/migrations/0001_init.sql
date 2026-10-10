@@ -31,6 +31,7 @@ CREATE TABLE tasks (
     revision INTEGER NOT NULL,
     milestone TEXT NOT NULL CHECK (milestone IN ('', 'published', 'merged')),
     run INTEGER,
+    artifact INTEGER,
     wake_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -94,6 +95,69 @@ CREATE TABLE runs (
     exited_at TEXT,
     UNIQUE (task, generation),
     FOREIGN KEY (task, attempt) REFERENCES attempts (task, n)
+);
+
+CREATE TABLE artifacts (
+    id INTEGER PRIMARY KEY,
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    attempt INTEGER NOT NULL,
+    run INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('code', 'report', 'answer')),
+    commit_sha TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    base TEXT NOT NULL DEFAULT '',
+    files TEXT NOT NULL DEFAULT '[]',
+    text TEXT NOT NULL,
+    sealed_at TEXT NOT NULL
+);
+
+CREATE TRIGGER artifacts_sealed BEFORE UPDATE ON artifacts
+BEGIN
+    SELECT RAISE(ABORT, 'sealed artifacts never change');
+END;
+
+CREATE TABLE attempt_inputs (
+    task INTEGER NOT NULL,
+    attempt INTEGER NOT NULL,
+    dependency INTEGER NOT NULL REFERENCES tasks(id),
+    artifact INTEGER NOT NULL REFERENCES artifacts(id),
+    path TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (task, attempt, dependency),
+    FOREIGN KEY (task, attempt) REFERENCES attempts (task, n)
+);
+
+CREATE TABLE grants (
+    id INTEGER PRIMARY KEY,
+    grantor TEXT NOT NULL,
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    actions TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT,
+    revoked_by TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE grant_uses (
+    id INTEGER PRIMARY KEY,
+    grant_ref TEXT NOT NULL,
+    action TEXT NOT NULL,
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    caller TEXT NOT NULL,
+    time TEXT NOT NULL
+);
+
+CREATE TABLE landings (
+    id INTEGER PRIMARY KEY,
+    task INTEGER NOT NULL REFERENCES tasks(id),
+    artifact INTEGER NOT NULL REFERENCES artifacts(id),
+    mode TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('published', 'merged', 'failed')),
+    pull_request TEXT NOT NULL DEFAULT '',
+    merge_commit TEXT NOT NULL DEFAULT '',
+    proof TEXT NOT NULL DEFAULT '',
+    proof_source TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    time TEXT NOT NULL
 );
 
 CREATE TABLE inbox_items (

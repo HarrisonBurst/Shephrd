@@ -91,8 +91,8 @@ func TestSubDriverLoopEndsInTheMainDriversInbox(t *testing.T) {
 				{"report": []string{"note", "Request done."}},
 			},
 		},
-		"t_2": {{{"report": []string{"result", "Part one built"}}}},
-		"t_3": {{{"report": []string{"result", "Part two built"}}}},
+		"t_2": {{{"work": "Part one"}, {"report": []string{"result", "Part one built"}}}},
+		"t_3": {{{"work": "Part two"}, {"report": []string{"result", "Part two built"}}}},
 	})
 	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Build the feature")
 	env.OK("task", "start", "t_1")
@@ -143,7 +143,7 @@ func TestReplyWakesTheWorker(t *testing.T) {
 	env, _ := withDaemon(t)
 	env.Script(map[string][][]action{"t_1": {
 		{{"report": []string{"question", "Use v1 or v2?"}}},
-		{{"report": []string{"result", "Used v2"}}},
+		{{"work": "Migrate"}, {"report": []string{"result", "Used v2"}}},
 	}})
 	env.StartDaemon()
 	env.OK("task", "create", "--repo", "api", "--objective", "Migrate")
@@ -172,7 +172,7 @@ func TestInactiveRunIsStoppedAndNudged(t *testing.T) {
 	env.AppendConfig("inactivity = \"1s\"")
 	env.Script(map[string][][]action{"t_1": {
 		{{"sleep": "60s"}},
-		{{"report": []string{"result", "Finished after the nudge"}}},
+		{{"work": "Work"}, {"report": []string{"result", "Finished after the nudge"}}},
 	}})
 	env.StartDaemon()
 	env.OK("task", "create", "--repo", "api", "--objective", "Work")
@@ -263,7 +263,7 @@ log = "` + log + `"`)
 
 func TestOnlyDriversHaveInboxes(t *testing.T) {
 	env, _ := withHarness(t)
-	env.Script(map[string][][]action{"t_1": {{{"shephrd": []string{"inbox"}}, {"report": []string{"result", "done"}}}}})
+	env.Script(map[string][][]action{"t_1": {{{"shephrd": []string{"inbox"}}, {"work": "Work"}, {"report": []string{"result", "done"}}}}})
 	env.OK("task", "create", "--repo", "api", "--objective", "Work")
 	env.OK("task", "start", "t_1")
 	env.WaitState("t_1", "done")

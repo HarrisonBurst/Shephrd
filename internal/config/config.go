@@ -30,6 +30,27 @@ type Config struct {
 	Skills    map[string]Skill        `toml:"skills"`
 	Timeouts  Timeouts                `toml:"timeouts"`
 	Drivers   map[string]Driver       `toml:"drivers"`
+	Repos     map[string]Repo         `toml:"repos"`
+	Grants    []Grant                 `toml:"grants"`
+}
+
+type Repo struct {
+	Landing Landing `toml:"landing"`
+}
+
+type Landing struct {
+	Mode   string `toml:"mode"`
+	Method string `toml:"method"`
+	Forge  string `toml:"forge"`
+	Merge  string `toml:"merge"`
+}
+
+// Grant is standing authority the user declared: to a driver or plugin,
+// or to every sub-driver, optionally for one repository.
+type Grant struct {
+	To      string   `toml:"to"`
+	Repo    string   `toml:"repo"`
+	Actions []string `toml:"actions"`
 }
 
 type Driver struct {
@@ -178,6 +199,34 @@ func (c *Config) resolve(getenv Getenv) error {
 	if c.MaxDepth < 1 {
 		return fault.New("invalid_config", "%s: max_depth must be at least 1", c.Path)
 	}
+	for name, repo := range c.Repos {
+		l := repo.Landing
+		switch {
+		case l.Mode == "direct" && l.Method == "":
+			l.Method = "fast-forward"
+		case l.Mode == "pull_request" && l.Merge == "":
+			return fault.New("invalid_config", "%s: repos.%s.landing: pull_request mode needs merge = \"shephrd\" or \"external\"", c.Path, name)
+		}
+		valid := l.Mode == "" ||
+			l.Mode == "direct" && (l.Method == "fast-forward" || l.Method == "merge") ||
+			l.Mode == "pull_request" && l.Forge != "" && (l.Merge == "shephrd" || l.Merge == "external")
+		if !valid {
+			return fault.New("invalid_config", "%s: repos.%s.landing: mode is direct (method fast-forward or merge) or pull_request (with forge and merge)", c.Path, name)
+		}
+		repo.Landing = l
+		c.Repos[name] = repo
+	}
+	for i, g := range c.Grants {
+		kind, name, _ := strings.Cut(g.To, ":")
+		if g.To != "subdriver" && !((kind == "driver" || kind == "plugin") && NamePattern.MatchString(name)) {
+			return fault.New("invalid_config", "%s: grants[%d].to is driver:<name>, plugin:<name> or subdriver", c.Path, i)
+		}
+		for _, action := range g.Actions {
+			if action != "land" && action != "discard" {
+				return fault.New("invalid_config", "%s: grants[%d] action %q is not land or discard", c.Path, i, action)
+			}
+		}
+	}
 	for name, pkg := range c.Packages {
 		if !NamePattern.MatchString(name) {
 			return fault.New("invalid_config", "%s: package name %q must match %s", c.Path, name, NamePattern)
@@ -232,7 +281,7 @@ func Write(path, host, driver string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create configuration directory: %w", err)
 	}
-	body := fmt.Sprintf("host = %q\ndriver = %q\n", host, driver)
+	body := fmt.Sprintf("host = %q\ndriver = %q\n\n[[grants]]\nto = \"driver:%s\"\nactions = [\"land\", \"discard\"]\n", host, driver, driver)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("write configuration: %w", err)

@@ -44,6 +44,10 @@ func TaskRef(id int64) string {
 	return "t_" + strconv.FormatInt(id, 10)
 }
 
+func ArtifactRef(id int64) string {
+	return "a_" + strconv.FormatInt(id, 10)
+}
+
 func ParseTaskRef(ref string) (int64, error) {
 	id, err := strconv.ParseInt(strings.TrimPrefix(ref, "t_"), 10, 64)
 	if err != nil || !strings.HasPrefix(ref, "t_") || id < 1 {

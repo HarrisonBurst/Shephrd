@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"shephrd/internal/artifact"
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
 	"shephrd/internal/fault"
@@ -16,6 +17,7 @@ func taskCommand(a *app) *cobra.Command {
 	cmd := &cobra.Command{Use: "task", Short: "Create, read and act on delegated tasks"}
 	cmd.AddCommand(taskCreate(a), taskShow(a), taskList(a), taskSend(a), taskCancel(a), taskAdopt(a), taskNote(a), taskData(a))
 	cmd.AddCommand(runCommands(a)...)
+	cmd.AddCommand(deliveryCommands(a)...)
 	return cmd
 }
 
@@ -140,6 +142,11 @@ func taskShow(a *app) *cobra.Command {
 			return nil, err
 		}
 		out := map[string]any{"task": t, "dependencies": deps, "children": children, "events": events, "data": data}
+		if t.ArtifactID != 0 {
+			if out["artifact"], err = artifact.Load(db, t.ArtifactID); err != nil {
+				return nil, err
+			}
+		}
 		if t.State == "queued" {
 			out["ready"] = ready
 		}
