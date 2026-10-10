@@ -1,1 +1,0 @@
-ALTER TABLE external_delivery_attestations ADD COLUMN evidence_digest TEXT NOT NULL DEFAULT '' CHECK(length(evidence_digest) IN (0, 64) AND (evidence_digest = '' OR evidence_digest = lower(evidence_digest)));

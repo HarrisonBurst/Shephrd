@@ -1,25 +1,17 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"shephrd/internal/cli"
 )
 
 func main() {
-	err := cli.New().Execute()
-	if err == nil {
-		return
-	}
-	if status, ok := cli.ExitStatus(err); ok {
-		os.Exit(status)
-	}
-	if cli.IsJSON(os.Args[1:]) {
-		_ = json.NewEncoder(os.Stderr).Encode(cli.ErrorResponse(err))
-	} else {
-		fmt.Fprintln(os.Stderr, "error:", err)
-	}
-	os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := cli.Main(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getenv)
+	stop()
+	os.Exit(code)
 }

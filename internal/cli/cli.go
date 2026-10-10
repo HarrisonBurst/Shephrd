@@ -1,0 +1,264 @@
+package cli
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/spf13/cobra"
+
+	"shephrd/internal/config"
+	"shephrd/internal/fault"
+	"shephrd/internal/store"
+)
+
+const Protocol = 1
+
+type Request struct {
+	V         int       `json:"v"`
+	Argv      []string  `json:"argv"`
+	Key       string    `json:"key"`
+	RunToken  string    `json:"run_token,omitempty"`
+	CallToken string    `json:"call_token,omitempty"`
+	Stdin     io.Reader `json:"-"`
+}
+
+type Warning struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
+type Response struct {
+	Result   json.RawMessage
+	Warnings []Warning
+}
+
+func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv config.Getenv) int {
+	if isHelp(args) {
+		root := newRoot(nil)
+		root.SetArgs(args)
+		root.SetOut(stdout)
+		root.SetErr(stderr)
+		if err := root.Execute(); err != nil {
+			return writeError(stderr, usage(err))
+		}
+		return 0
+	}
+	argv, as, key, err := extractEnvelopeFlags(args)
+	if err != nil {
+		return writeError(stderr, err)
+	}
+	if key == "" {
+		key = uuid.NewString()
+	}
+	req := Request{V: Protocol, Argv: argv, Key: key, RunToken: getenv("SHEPHRD_RUN_TOKEN"), CallToken: getenv("SHEPHRD_CALL_TOKEN"), Stdin: stdin}
+	resp, err := Dispatch(ctx, Origin{Local: true, As: as}, req, getenv)
+	if err != nil {
+		return writeError(stderr, err)
+	}
+	return writeResponse(stdout, resp)
+}
+
+func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Getenv) (Response, error) {
+	if req.V != Protocol {
+		return Response{}, fault.New("version_mismatch", "request protocol %d, this release speaks %d", req.V, Protocol)
+	}
+	if isHelp(req.Argv) {
+		return Response{}, fault.New("usage", "help is rendered by the local binary")
+	}
+	if req.Key == "" || len(req.Key) > 128 {
+		return Response{}, fault.New("usage", "a request needs a key of 1 to 128 bytes")
+	}
+	if req.Stdin == nil {
+		req.Stdin = strings.NewReader("")
+	}
+	for _, arg := range req.Argv {
+		if arg == "--as" || strings.HasPrefix(arg, "--as=") || arg == "--key" || strings.HasPrefix(arg, "--key=") {
+			return Response{}, fault.New("usage", "%s belongs to the request envelope, not argv", strings.SplitN(arg, "=", 2)[0])
+		}
+	}
+	a := &app{ctx: ctx, origin: origin, req: req, getenv: getenv}
+	defer a.close()
+	root := newRoot(a)
+	root.SetArgs(req.Argv)
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	if err := root.ExecuteContext(ctx); err != nil {
+		var fe *fault.Error
+		if errors.As(err, &fe) {
+			return Response{}, fe
+		}
+		return Response{}, usage(err)
+	}
+	if a.result == nil {
+		return Response{}, fault.New("usage", "%q needs a subcommand", strings.Join(req.Argv, " "))
+	}
+	return Response{Result: a.result, Warnings: a.warnings}, nil
+}
+
+type app struct {
+	ctx      context.Context
+	origin   Origin
+	req      Request
+	getenv   config.Getenv
+	cfg      *config.Config
+	caller   *Caller
+	db       *store.Store
+	stdin    []byte
+	stdinUse bool
+	result   json.RawMessage
+	warnings []Warning
+}
+
+func (a *app) close() {
+	if a.db != nil {
+		a.db.Close()
+	}
+}
+
+func (a *app) config() (*config.Config, error) {
+	if a.cfg == nil {
+		cfg, err := config.Load(a.getenv)
+		if err != nil {
+			return nil, err
+		}
+		a.cfg = &cfg
+	}
+	return a.cfg, nil
+}
+
+func (a *app) store() (*store.Store, error) {
+	if a.db == nil {
+		cfg, err := a.config()
+		if err != nil {
+			return nil, err
+		}
+		if a.db, err = store.Open(a.ctx, cfg.Store); err != nil {
+			return nil, err
+		}
+	}
+	return a.db, nil
+}
+
+func (a *app) run(fn func(cmd *cobra.Command, args []string) (any, error)) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		value, err := fn(cmd, args)
+		if err != nil {
+			return fault.As(err)
+		}
+		if raw, ok := value.(json.RawMessage); ok {
+			a.result = raw
+			return nil
+		}
+		a.result, err = json.Marshal(value)
+		return err
+	}
+}
+
+func (a *app) mutate(fn func(tx *store.Tx, caller Caller) (any, error)) (any, error) {
+	caller, err := a.identity()
+	if err != nil {
+		return nil, err
+	}
+	db, err := a.store()
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.New()
+	json.NewEncoder(digest).Encode(a.req.Argv)
+	digest.Write(a.stdin)
+	return db.Mutate(a.ctx, caller.String(), a.req.Key, hex.EncodeToString(digest.Sum(nil)), func(tx *store.Tx) (any, error) {
+		return fn(tx, caller)
+	})
+}
+
+func (a *app) text(field, value string, limit int) (string, error) {
+	if value == "-" {
+		if a.stdinUse {
+			return "", fault.New("usage", "only one field can be read from stdin")
+		}
+		a.stdinUse = true
+		body, err := io.ReadAll(io.LimitReader(a.req.Stdin, int64(limit)+1))
+		if err != nil {
+			return "", err
+		}
+		a.stdin = body
+		value = string(body)
+	}
+	if len(value) > limit {
+		return "", fault.New("too_large", "%s is larger than %d bytes", field, limit)
+	}
+	return value, nil
+}
+
+func writeResponse(w io.Writer, resp Response) int {
+	out := resp.Result
+	if len(resp.Warnings) > 0 {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(resp.Result, &object); err != nil {
+			return 1
+		}
+		object["warnings"], _ = json.Marshal(resp.Warnings)
+		out, _ = json.Marshal(object)
+	}
+	w.Write(append(out, '\n'))
+	return 0
+}
+
+func writeError(w io.Writer, err error) int {
+	fe := fault.As(err)
+	body, _ := json.Marshal(map[string]*fault.Error{"error": fe})
+	w.Write(append(body, '\n'))
+	if fe.Unknown {
+		return 3
+	}
+	return 1
+}
+
+func usage(err error) *fault.Error {
+	return fault.New("usage", "%s", err.Error()).WithNext("help")
+}
+
+func isHelp(args []string) bool {
+	if len(args) == 0 || args[0] == "help" {
+		return true
+	}
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func extractEnvelopeFlags(args []string) (argv []string, as, key string, err error) {
+	argv = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		name, value, inline := strings.Cut(args[i], "=")
+		if name != "--as" && name != "--key" {
+			argv = append(argv, args[i])
+			continue
+		}
+		if !inline {
+			if i+1 == len(args) {
+				return nil, "", "", fault.New("usage", "%s needs a value", name)
+			}
+			i++
+			value = args[i]
+		}
+		if name == "--as" {
+			as = value
+		} else {
+			key = value
+		}
+	}
+	return argv, as, key, nil
+}
