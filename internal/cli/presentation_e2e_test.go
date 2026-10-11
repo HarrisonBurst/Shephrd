@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"shephrd/internal/testkit"
 )
@@ -151,7 +152,7 @@ func TestReportedButLiveTurnKeepsItsTab(t *testing.T) {
 	}
 }
 
-func TestUnreportedPresentedRunHoldsUntilEnter(t *testing.T) {
+func TestUnreportedPresentedRunGetsInspectionGraceAndNudge(t *testing.T) {
 	env := withHerdr(t)
 	env.Script(map[string][][]action{"t_1": {{{"exit": 0}}, {{"exit": 0}}}})
 	env.OK("task", "create", "--repo", "api", "--objective", "Work")
@@ -161,22 +162,22 @@ func TestUnreportedPresentedRunHoldsUntilEnter(t *testing.T) {
 		shown, _ := os.ReadFile(filepath.Join(env.Home, ".fakeherdr", "p1.log"))
 		return strings.Contains(string(shown), "shephrd task log t_1")
 	})
+	time.Sleep(6 * time.Second)
 	if panes := herdrPanes(env); panes[0]["closed"] == true {
-		t.Fatalf("unreported turn closed before Enter: %v", panes)
+		t.Fatalf("unreported turn closed during inspection grace: %v", panes)
 	}
-	env.OK("workspace", "reconcile")
-	if run := env.OK("task", "log", "t_1")["run"].(map[string]any); run["liveness"] != "live" {
-		t.Fatalf("a live supervisor was classified exited from its harness record: %v", run)
+	deadline := time.Now().Add(40 * time.Second)
+	for time.Now().Before(deadline) && !herdrPanes(env)[0]["closed"].(bool) {
+		time.Sleep(100 * time.Millisecond)
 	}
-	input, err := os.OpenFile(filepath.Join(env.Home, ".fakeherdr", "p1.stdin"), os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
+	if panes := herdrPanes(env); panes[0]["closed"] != true {
+		t.Fatalf("daemon did not supersede the held terminal: %v", panes)
 	}
-	input.Write([]byte("\n"))
-	input.Close()
-	env.Eventually("the unreported terminal to close on Enter", func() bool {
-		return herdrPanes(env)[0]["closed"] == true
+	env.Eventually("the nudge terminal hint", func() bool {
+		shown, _ := os.ReadFile(filepath.Join(env.Home, ".fakeherdr", "p2.log"))
+		return strings.Contains(string(shown), "shephrd task log t_1")
 	})
+	time.Sleep(32 * time.Second)
 	waitStateFromDaemon(t, env, "t_1", "held")
 }
 
@@ -237,6 +238,7 @@ func TestFailedHarnessStartKeepsItsTerminalForInspection(t *testing.T) {
 	input.Write([]byte("\n"))
 	input.Close()
 	env.StartDaemon()
+	time.Sleep(32 * time.Second)
 	waitStateFromDaemon(t, env, "t_1", "held")
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -167,7 +168,7 @@ func Supervise(runDir string) int {
 		return 1
 	}
 	if hold {
-		bufio.NewReader(os.Stdin).ReadString('\n')
+		waitForInputOrSignal()
 	}
 	return 0
 }
@@ -242,6 +243,21 @@ func (s RunSpec) endTurn(token string, harness *os.Process, done <-chan struct{}
 			harness.Kill()
 		}
 		return
+	}
+}
+
+func waitForInputOrSignal() {
+	input := make(chan struct{})
+	go func() {
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		close(input)
+	}()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	select {
+	case <-input:
+	case <-signals:
 	}
 }
 
