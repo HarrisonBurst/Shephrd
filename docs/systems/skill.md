@@ -52,7 +52,7 @@ Guidance competes with the work for context, so each document stays short:
 Every document teaches:
 
 - **Identity comes from context.** Never pass another caller's identity or edit Shephrd's state directly.
-- **Reports and results are evidence, not authority.** `task deliver` accepts report and answer results without a grant; delivering code needs a `land` grant and discarding work needs a `discard` grant, but both also require the user's explicit approval. A grant is necessary, not sufficient, and only an explicit command authorizes those actions.
+- **Reports and results are evidence, not authority.** `task deliver` accepts report and answer results without a grant; delivering code needs a `land` grant and discarding work needs a `discard` grant. Core authorization is the grant and the explicit command, not a separate approval field: a standing configuration grant is the user's explicit authority, and a delegated grant records the user's approval in its reason. A sub-driver follows its grant and does not ask the user directly.
 - **Fail closed.** When state is unclear, such as `unknown` liveness or a held task, inspect and ask rather than guess. Never work around a refusal.
 - **Follow the `next` commands** in errors and inbox items rather than inventing recovery steps.
 - **Large content moves by reference.** Put documents in report files, and keep results to a summary.
@@ -70,9 +70,9 @@ The main driver's job is to understand the user and keep the conversation moving
   - Results: surface the substantive report content to the user, including findings, outcomes and important caveats; read referenced artifacts when the summary is insufficient. Do not substitute a generic completion notice.
   - Held tasks: inspect them and decide with the user.
   - Check the current `task_state` and all request states before calling work complete. A result answers one request; a reused sub-driver is `done` only after every request is answered and its turn settles.
-  - Keep an owned sub-driver open while it may be reused. Deliver it only when its work is finished and its children are closed. `task deliver` accepts report and answer results without a grant; code delivery needs a `land` grant and the user's explicit approval, and code in pull-request mode remains `done` awaiting merge until the pull request is merged and proved.
+  - Keep an owned sub-driver open while it may be reused. Deliver it only when its work is finished and its children are closed. `task deliver` accepts report and answer results without a grant; code delivery needs a `land` grant. A standing configuration grant is the user's explicit authority, and a delegated grant records the user's approval in its reason. Code in pull-request mode remains `done` awaiting merge until the pull request is merged and proved.
   - Acknowledge each item after handling it. Inbox acknowledgement only marks an item handled, not a task done or a result accepted or delivered.
-- **Authority comes from the user.** `task deliver` accepts report and answer results without a grant. Delivering code needs a `land` grant and the user's explicit approval in every landing mode, and discarding work needs a `discard` grant and the user's explicit approval. When the user approves a sub-driver landing its own work, delegate with `grant`, recording the user's approval as the reason.
+- **Authority comes from the user.** `task deliver` accepts report and answer results without a grant. Delivering code needs a `land` grant in every landing mode, and discarding work needs a `discard` grant. The main driver asks the user when it needs approval not already represented by a standing configuration grant; when delegating, record the user's approval in the grant reason. Core checks the grant and explicit command, not a separate approval field.
 - **Do not supervise grandchildren.** Read them when useful, but act only through the sub-driver.
 
 ## Sub-driver

@@ -77,7 +77,7 @@ Authorization is the same rule everywhere, using ownership from [coordination](c
 
 - **Read:** the caller's own subtree. The operator reads everything.
 - **Mutate a task:** its owner only. A run may also report on its own task.
-- **Code landing and discard** additionally need a recorded grant and explicit user approval, defined by [artifacts and authority](artifacts.md#grants).
+- **Code landing and discard** additionally need a recorded grant, defined by [artifacts and authority](artifacts.md#grants). User-approval guidance is policy, not an additional CLI authorization check.
 - **Host administration** (`init`, `repo add`, `plugin sync`) is operator-only, because it changes what runs on a host.
 
 A remote driver is limited by what it owns and what it has been granted, not by a reduced command list.
