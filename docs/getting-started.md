@@ -10,7 +10,7 @@ This guide sets Shephrd up on one machine, then across three. The [system design
 shephrd init
 ```
 
-This writes `~/.config/shephrd/config.toml`, creates the store, and makes this machine the home host. The configuration names your main driver `main` and grants it `land` and `discard`, so it can deliver code and discard work in its own trees.
+This writes `~/.config/shephrd/config.toml`, creates the store, and makes this machine the home host. The configuration names your main driver `main` and grants it `land` and `discard`, so it can deliver code in its own trees; discarding still needs explicit per-action user approval.
 
 Choose a default harness and model:
 
@@ -75,7 +75,7 @@ extend = "/path/to/house-rules.md"
 
 ### Receive results
 
-Results, questions and held tasks reach the main driver's inbox. `shephrd inbox` lists them; `shephrd inbox ack <item>` marks one handled. To have them pushed, configure a delivery for the driver:
+Results, questions and held tasks reach the main driver's inbox. Read each report and any referenced artifacts, share the findings with the user, then acknowledge the item. Check `shephrd task show` before calling work complete: a reused sub-driver is done only after all requests are answered. Deliver report or answer tasks without a grant; code delivery needs `land`, and a standing `land` grant is prior authorization. Discarding needs `discard` plus explicit per-action user approval, even with a standing grant. Code in pull-request mode stays done until the pull request merges. To have inbox items pushed, configure a delivery for the driver:
 
 ```toml
 [drivers.main.delivery]
@@ -150,7 +150,7 @@ merge_method = "squash"
 | Plugin | Provides |
 |---|---|
 | `github` | The forge for `pull_request` landing, through an authenticated `gh` CLI. |
-| `herdr`, `cmux` | Presentation: each task gets a terminal tab, labelled with its ID, role and title, where the harness runs its own interface for every turn. The tab closes when the task closes. Set `presentation = "herdr"` (or `"cmux"`) in the host's configuration. Herdr's options are `workspace`, a workspace label or ID that is created when missing (default `Shephrd tasks`), and `socket` when Herdr is not on its default socket. cmux needs `socket` and `window`, and its socket must accept outside processes: set its socket control to password mode and give the plugin `password`. |
+| `herdr`, `cmux` | Presentation: each task gets a terminal tab, labelled with its ID, role and title, where the harness runs its own interface for every turn. A reported turn exits its own terminal process, closing the tab; continuation opens a fresh tab and resumes the same native harness session. A turn without a report or a harness that failed to start shows a task-log hint and holds the terminal until Enter or supersession. Execution never closes a tab by endpoint ID. Set `presentation = "herdr"` (or `"cmux"`) in the host's configuration. Herdr's options are `workspace`, a workspace label or ID that is created when missing (default `Shephrd tasks`), and `socket` when Herdr is not on its default socket. cmux needs `socket` and `window`, and its socket must accept outside processes: set its socket control to password mode and give the plugin `password`. |
 | `macos-notify` | A notification for each new inbox item. |
 
 The Pi extension `plugins/pi/shephrd-inbox.ts` (`share/shephrd/pi/` in the Nix package) is not a Shephrd plugin; install it into Pi for a main driver that runs in Pi. Shephrd's own sessions ignore it.

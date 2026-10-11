@@ -40,7 +40,6 @@ type (
 		Spec   RunSpec `json:"spec"`
 		Token  string  `json:"token"`
 		Title  string  `json:"title,omitempty"`
-		Reuse  string  `json:"reuse,omitempty"`
 	}
 	RunDirRequest struct {
 		RunDir string `json:"run_dir"`
@@ -51,11 +50,14 @@ type (
 		Truncated bool   `json:"truncated"`
 	}
 	ExitResponse struct {
-		Record ExitRecord `json:"record"`
-		Found  bool       `json:"found"`
+		Record  ExitRecord `json:"record"`
+		Found   bool       `json:"found"`
+		Present bool       `json:"present"`
 	}
 	StopRequest struct {
-		PGID int `json:"pgid"`
+		PGID  int    `json:"pgid"`
+		PID   int    `json:"pid"`
+		Start string `json:"start"`
 	}
 	RemoveRequest struct {
 		Repo   string   `json:"repo"`
@@ -197,15 +199,28 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 		if err != nil {
 			return nil, err
 		}
-		return StateResponse{State: id.Probe()}, nil
+		state := id.Probe()
+		if state == "exited" && proc.GroupAlive(id.PID) {
+			state = "unknown"
+		}
+		return StateResponse{State: state}, nil
 	case "stop":
 		req, err := decode[StopRequest](body)
 		if err != nil {
 			return nil, err
 		}
 		state := "unknown"
-		if proc.StopGroup(req.PGID, 5*time.Second) {
-			state = "exited"
+		if req.PID > 0 && req.Start != "" && req.PGID == req.PID {
+			switch (proc.Identity{PID: req.PID, Start: req.Start}).Probe() {
+			case "live":
+				if proc.StopGroup(req.PGID, 5*time.Second) {
+					state = "exited"
+				}
+			case "exited":
+				if !proc.GroupAlive(req.PGID) {
+					state = "exited"
+				}
+			}
 		}
 		return StateResponse{State: state}, nil
 	case "exit_record":
@@ -214,7 +229,15 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, err
 		}
 		record, found := ReadExit(req.RunDir)
-		return ExitResponse{Record: record, Found: found}, nil
+		_, presentErr := os.Stat(req.RunDir)
+		if !found {
+			body, _ := os.ReadFile(filepath.Join(req.RunDir, "run.json"))
+			var spec RunSpec
+			if json.Unmarshal(body, &spec) == nil && spec.Harness == "codex" && !spec.Interactive {
+				record.Session = codexSession(LogPath(req.RunDir))
+			}
+		}
+		return ExitResponse{Record: record, Found: found, Present: presentErr == nil}, nil
 	case "read_log":
 		req, err := decode[RunDirRequest](body)
 		if err != nil {

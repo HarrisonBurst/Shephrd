@@ -275,12 +275,8 @@ func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coor
 		}
 	}
 	var launched LaunchResponse
-	var reuse string
-	if interactive {
-		x.DB.QueryRowContext(ctx, `SELECT endpoint FROM runs WHERE task = ? AND id != ? AND endpoint != '' ORDER BY id DESC LIMIT 1`, t.ID, run.ID).Scan(&reuse)
-	}
 	err = host.Call(ctx, "launch", LaunchRequest{
-		RunDir: run.Dir, Brief: brief, Token: token, Title: label, Reuse: reuse,
+		RunDir: run.Dir, Brief: brief, Token: token, Title: label,
 		Spec: RunSpec{Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness, Interactive: interactive, Label: label},
 	}, &launched)
 	if err != nil {
@@ -316,7 +312,7 @@ func (x *Executor) abandon(ctx context.Context, run *coord.Run, reason string) {
 			return err
 		}
 		run.StopReason = reason
-		if _, err := coord.RecordExit(tx, run, -1, ""); err != nil {
+		if err := coord.RecordExit(tx, run, -1, ""); err != nil {
 			return err
 		}
 		t, err := coord.Load(tx, run.Task)
@@ -395,25 +391,15 @@ func (x *Executor) brief(ctx context.Context, shephrd string, t *coord.Task, a *
 	return renderBrief(in), nil
 }
 
-// Exited records a run's exit as its supervisor reported it, and starts
-// the one nudge when the run ended without reporting its turn.
 func (x *Executor) Exited(ctx context.Context, runID int64, status int, session string) error {
-	var nudge bool
-	var taskID int64
-	err := x.write(ctx, func(tx *store.Tx) error {
+	return x.write(ctx, func(tx *store.Tx) error {
 		r, err := coord.LoadRun(tx, runID)
 		if err != nil {
 			return err
 		}
-		taskID = r.Task
-		nudge, err = coord.RecordExit(tx, r, status, session)
+		err = coord.RecordExit(tx, r, status, session)
 		return err
 	})
-	if err != nil || !nudge {
-		return err
-	}
-	_, err = x.Start(ctx, "system", taskID, "nudge", nil)
-	return err
 }
 
 // Probe observes a run's liveness on its host and records what it finds.
@@ -425,19 +411,45 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		return "exited", nil
 	}
 	observed := "unknown"
+	holdReason := ""
 	host, hostErr := x.Host(r.Host)
 	switch {
 	case r.PID != 0 && hostErr == nil:
 		var state StateResponse
 		if host.Call(ctx, "probe", proc.Identity{PID: r.PID, Start: r.Start}, &state) == nil {
 			observed = state.State
+			if observed == "unknown" {
+				holdReason = "lost"
+			}
 		}
-	case r.Liveness == "starting" && r.Endpoint != "" && hostErr == nil:
-		var shown PresentationResponse
-		if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: r.Endpoint}, &shown); err != nil || shown.State != "absent" {
-			return "starting", nil
+	case (r.Liveness == "starting" || r.Liveness == "unknown") && r.PID == 0 && hostErr == nil:
+		var exit ExitResponse
+		if host.Call(ctx, "exit_record", RunDirRequest{RunDir: r.Dir}, &exit) == nil && exit.Found {
+			applied, err := x.recordUnidentifiedExit(ctx, r, exit.Record)
+			if err != nil {
+				return "unknown", err
+			}
+			if applied {
+				return "exited", nil
+			}
+			current, err := coord.LoadRun(x.DB, r.ID)
+			if err != nil {
+				return "unknown", err
+			}
+			if current.Liveness == "exited" {
+				return "exited", nil
+			}
+			if current.PID != 0 {
+				return x.Probe(ctx, current)
+			}
 		}
-		observed = "exited"
+		if r.Liveness == "starting" {
+			started, _ := time.Parse("2006-01-02T15:04:05.000000000Z", r.Started)
+			if time.Since(started) < 2*time.Minute {
+				return "starting", nil
+			}
+			holdReason = "start_failed"
+		}
 	case r.Liveness == "starting":
 		started, _ := time.Parse("2006-01-02T15:04:05.000000000Z", r.Started)
 		if time.Since(started) < 2*time.Minute {
@@ -445,6 +457,9 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		}
 	}
 	if observed != "exited" {
+		if holdReason != "" {
+			return observed, x.markUnknown(ctx, r, holdReason)
+		}
 		err := x.write(ctx, func(tx *store.Tx) error { return coord.SetLiveness(tx, r, observed) })
 		return observed, err
 	}
@@ -459,8 +474,10 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		if _, err := tx.Exec(`UPDATE runs SET stop_reason = 'lost' WHERE id = ? AND stop_reason = ''`, r.ID); err != nil {
 			return err
 		}
-		r.StopReason = "lost"
-		if _, err := coord.RecordExit(tx, r, -1, ""); err != nil {
+		if r.StopReason == "" {
+			r.StopReason = "lost"
+		}
+		if err := coord.RecordExit(tx, r, -1, ""); err != nil {
 			return err
 		}
 		t, err := coord.Load(tx, r.Task)
@@ -470,9 +487,50 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		if current, err := coord.CurrentRun(tx, t); err != nil || current.ID != r.ID || (t.State != "running" && t.State != "waiting") {
 			return err
 		}
-		return coord.Hold(tx, t, "lost")
+		return coord.Hold(tx, t, r.StopReason)
 	})
 	return "exited", err
+}
+
+func (x *Executor) recordUnidentifiedExit(ctx context.Context, r *coord.Run, record ExitRecord) (bool, error) {
+	applied := false
+	err := x.write(ctx, func(tx *store.Tx) error {
+		current, err := coord.LoadRun(tx, r.ID)
+		if err != nil {
+			return err
+		}
+		if current.PID != 0 || current.Liveness == "exited" {
+			return nil
+		}
+		if err := coord.RecordExit(tx, current, record.Status, record.Session); err != nil {
+			return err
+		}
+		applied = true
+		return nil
+	})
+	return applied, err
+}
+
+func setUnknown(tx *store.Tx, r *coord.Run, t *coord.Task, reason string) error {
+	switch t.State {
+	case "running", "waiting":
+		if err := coord.SetLiveness(tx, r, "unknown"); err != nil {
+			return err
+		}
+		return coord.Hold(tx, t, reason)
+	default:
+		return coord.SetLivenessAndWake(tx, r, "unknown")
+	}
+}
+
+func (x *Executor) markUnknown(ctx context.Context, r *coord.Run, reason string) error {
+	return x.write(ctx, func(tx *store.Tx) error {
+		t, err := coord.Load(tx, r.Task)
+		if err != nil {
+			return err
+		}
+		return setUnknown(tx, r, t, reason)
+	})
 }
 
 // stopGroup stops a run's process group on its host and reports whether
@@ -482,16 +540,38 @@ func (x *Executor) stopGroup(ctx context.Context, r *coord.Run) bool {
 	if err != nil {
 		return false
 	}
-	stopped := false
-	if r.PID != 0 {
-		var state StateResponse
-		stopped = host.Call(ctx, "stop", StopRequest{PGID: r.PID}, &state) == nil && state.State == "exited"
+	deadline := time.Now().Add(2 * time.Second)
+	for r.PID == 0 && time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+		fresh, err := coord.LoadRun(x.DB, r.ID)
+		if err != nil {
+			return false
+		}
+		r.PID, r.Start = fresh.PID, fresh.Start
 	}
-	if r.Endpoint != "" {
-		closed := host.Call(ctx, "presentation", PresentationRequest{Operation: "close", Endpoint: r.Endpoint}, nil) == nil
-		stopped = stopped || r.PID == 0 && closed
+	if r.PID == 0 || r.Start == "" {
+		return false
 	}
-	return stopped
+	var state StateResponse
+	if err := host.Call(ctx, "stop", StopRequest{PGID: r.PID, PID: r.PID, Start: r.Start}, &state); err != nil || state.State != "exited" {
+		return false
+	}
+	return true
+}
+
+func (x *Executor) stoppedSession(ctx context.Context, r *coord.Run) string {
+	host, err := x.Host(r.Host)
+	if err != nil {
+		return ""
+	}
+	var exit ExitResponse
+	if host.Call(ctx, "exit_record", RunDirRequest{RunDir: r.Dir}, &exit) != nil {
+		return ""
+	}
+	return exit.Record.Session
 }
 
 // Stop ends a task's current run: it signals the run's process group, and
@@ -511,14 +591,11 @@ func (x *Executor) Stop(ctx context.Context, t *coord.Task, reason string) (*coo
 		r.StopReason = reason
 		if !x.stopGroup(ctx, r) {
 			err := x.write(ctx, func(tx *store.Tx) error {
-				if err := coord.SetLiveness(tx, r, "unknown"); err != nil {
-					return err
-				}
 				t, err := coord.Load(tx, t.ID)
-				if err != nil || t.State == "held" {
+				if err != nil {
 					return err
 				}
-				return coord.Hold(tx, t, reason)
+				return setUnknown(tx, r, t, reason)
 			})
 			if err != nil {
 				return nil, err
@@ -527,9 +604,13 @@ func (x *Executor) Stop(ctx context.Context, t *coord.Task, reason string) (*coo
 				WithNext("workspace", "reconcile")
 		}
 	}
+	session := ""
+	if r != nil && r.Liveness != "exited" {
+		session = x.stoppedSession(ctx, r)
+	}
 	err = x.write(ctx, func(tx *store.Tx) error {
 		if r != nil && r.Liveness != "exited" {
-			if _, err := coord.RecordExit(tx, r, -1, ""); err != nil {
+			if err := coord.RecordExit(tx, r, -1, session); err != nil {
 				return err
 			}
 		}
@@ -544,6 +625,70 @@ func (x *Executor) Stop(ctx context.Context, t *coord.Task, reason string) (*coo
 			return nil
 		}
 		return fault.New("not_running", "%s is %s; there is nothing to stop", t.Ref, t.State)
+	})
+	return r, err
+}
+
+func (x *Executor) Abandon(ctx context.Context, t *coord.Task) (*coord.Run, error) {
+	currentTask, err := coord.Load(x.DB, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	t = currentTask
+	r, err := coord.CurrentRun(x.DB, t)
+	if err != nil {
+		return nil, err
+	}
+	if r == nil || t.State != "held" || r.Liveness != "unknown" || r.PID != 0 || r.Endpoint == "" {
+		return r, fault.New("abandon_unconfirmed", "%s has no held PID-less unknown presentation run to abandon", t.Ref).WithNext("task", "show", t.Ref)
+	}
+	attempt, err := coord.LoadAttempt(x.DB, t.ID, t.Attempt)
+	if err != nil {
+		return r, err
+	}
+	if attempt.WorkspaceState != "held" {
+		return r, fault.New("abandon_unconfirmed", "%s workspace is not held", t.Ref).WithNext("workspace", "reconcile")
+	}
+	host, err := x.Host(r.Host)
+	if err != nil {
+		return r, err
+	}
+	var shown PresentationResponse
+	if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: r.Endpoint}, &shown); err != nil || shown.State != "absent" {
+		return r, fault.New("abandon_unconfirmed", "%s presentation endpoint is not proven absent", t.Ref).WithNext("workspace", "reconcile")
+	}
+	var exit ExitResponse
+	if err := host.Call(ctx, "exit_record", RunDirRequest{RunDir: r.Dir}, &exit); err != nil {
+		return r, err
+	}
+	if exit.Found || !exit.Present {
+		return r, fault.New("abandon_unconfirmed", "%s run directory has exit evidence or is absent", t.Ref).WithNext("workspace", "reconcile")
+	}
+	err = x.write(ctx, func(tx *store.Tx) error {
+		currentTask, err := coord.Load(tx, t.ID)
+		if err != nil {
+			return err
+		}
+		current, err := coord.CurrentRun(tx, currentTask)
+		if err != nil || current == nil {
+			return err
+		}
+		if current.ID != r.ID || currentTask.State != "held" || current.Liveness != "unknown" || current.PID != 0 || current.Endpoint != r.Endpoint {
+			return fault.New("abandon_stale", "%s run changed while it was being checked", t.Ref)
+		}
+		currentAttempt, err := coord.LoadAttempt(tx, currentTask.ID, currentTask.Attempt)
+		if err != nil {
+			return err
+		}
+		if currentAttempt.WorkspaceState != "held" {
+			return fault.New("abandon_stale", "%s workspace changed while it was being checked", t.Ref)
+		}
+		if _, err := tx.Exec(`UPDATE runs SET stop_reason = 'abandoned' WHERE id = ?`, current.ID); err != nil {
+			return err
+		}
+		current.StopReason = "abandoned"
+		err = coord.RecordExit(tx, current, -1, "")
+		return err
 	})
 	return r, err
 }

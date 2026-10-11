@@ -41,6 +41,12 @@ async function turn(h: ReturnType<typeof harness>, text: string, stopReason: str
   await h.handlers.agent_settled({});
 }
 
+test("keeps the full bounded report body in the turn", () => {
+  const body = "x".repeat(5000);
+  const longItem = { ...item(1), event: { ...item(1).event, data: { body } } };
+  assert.ok(itemText(longItem).includes(body));
+});
+
 test("delivers each item as a turn and acknowledges it once handled", async () => {
   const h = harness();
   await h.handlers.session_start({}, h.ctx);

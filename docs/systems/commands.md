@@ -77,7 +77,7 @@ Authorization is the same rule everywhere, using ownership from [coordination](c
 
 - **Read:** the caller's own subtree. The operator reads everything.
 - **Mutate a task:** its owner only. A run may also report on its own task.
-- **Irreversible actions** (landing, discard, release) additionally need a recorded grant, defined by [artifacts and authority](artifacts.md#grants).
+- **Code landing and discard** additionally need a recorded grant, defined by [artifacts and authority](artifacts.md#grants). A standing `land` grant is prior user authorization; discard still needs explicit per-action approval even with a standing `discard` grant. These approval rules are policy, not additional CLI authorization checks.
 - **Host administration** (`init`, `repo add`, `plugin sync`) is operator-only, because it changes what runs on a host.
 
 A remote driver is limited by what it owns and what it has been granted, not by a reduced command list.
@@ -145,7 +145,7 @@ Each command's behavior is defined by the spec named in its row.
 | `task cancel`, `task adopt`, `task note` | Cancel a task that has nothing to lose, adopt a root, record an owner's note | [Coordination](coordination.md) |
 | `task data set` | Write the caller's plugin data namespace on a task | [Coordination](coordination.md) |
 | `task start`, `task resume`, `task retry` | Start a run on a new attempt, the same attempt, or a new attempt after a previous one | [Execution](execution.md) |
-| `task stop` | Stop the current run, with `--tree` for a whole subtree | [Execution](execution.md) |
+| `task stop` | Stop the current run, with `--tree` for a whole subtree or `--abandon` for an unstarted presentation run after fail-closed checks | [Execution](execution.md) |
 | `task log` | Read a run's session log | [Execution](execution.md) |
 | `workspace reconcile` | Classify interrupted effects on every host | [Execution](execution.md) |
 | `host list` | Hosts with reachability, version and installed providers | [Execution](execution.md) |
@@ -160,7 +160,7 @@ Each command's behavior is defined by the spec named in its row.
 | `<plugin-name> ...` | Subcommands added by plugins | [Plugins](extensibility.md) |
 | `skill main`, `skill subdriver`, `skill worker` | Print a role's guidance | [Guidance](skill.md) |
 
-`help` prints text help for any command. `agent`, `_run`, `_started` and `_exited` are private commands between Shephrd binaries of the same release, not part of this surface.
+`help` prints text help for any command. `agent`, `_run` and `_started` are private commands between Shephrd binaries of the same release, not part of this surface.
 
 That is 44 leaf commands, against 68 today. Each role uses far fewer:
 

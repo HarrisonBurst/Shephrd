@@ -13,12 +13,16 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+
+	"shephrd/internal/proc"
 )
 
 type pane struct {
 	ID      string `json:"pane_id"`
 	Tab     string `json:"tab_id"`
 	PID     int    `json:"pid"`
+	Start   string `json:"start"`
 	Closed  bool   `json:"closed"`
 	Command string `json:"command"`
 	Label   string `json:"label"`
@@ -52,17 +56,39 @@ func main() {
 		panes = append(panes, pane{ID: "p" + n, Tab: "t" + n, Label: label})
 		save(panes)
 		fmt.Printf(`{"result":{"tab":{"tab_id":"t%s"},"root_pane":{"pane_id":"p%s"}}}`+"\n", n, n)
+	case "pane list":
+		fmt.Println(`{"result":{"panes":[]}}`)
 	case "pane run":
 		p := find(args[2])
+		for started := time.Now(); time.Since(started) < 10*time.Second; time.Sleep(25 * time.Millisecond) {
+			if _, err := os.Stat(filepath.Join(dir, "pause-before-run")); os.IsNotExist(err) {
+				break
+			}
+		}
 		cmd := exec.Command("sh", "-c", strings.Join(args[3:], " "))
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		log, _ := os.OpenFile(filepath.Join(dir, p.ID+".log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 		cmd.Stdout, cmd.Stderr = log, log
+		input := filepath.Join(dir, p.ID+".stdin")
+		if err := syscall.Mkfifo(input, 0o600); err != nil && !os.IsExist(err) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		stdin, err := os.OpenFile(input, os.O_RDWR, 0o600)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer stdin.Close()
+		cmd.Stdin = stdin
 		if err := cmd.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		p.PID, p.Command = cmd.Process.Pid, strings.Join(args[3:], " ")
+		if id, err := proc.Of(p.PID); err == nil {
+			p.Start = id.Start
+		}
 		p.Runs++
 		save(panes)
 	case "tab rename":
@@ -76,12 +102,8 @@ func main() {
 		p := find(args[2])
 		fmt.Printf(`{"result":{"pane":{"pane_id":%q,"tab_id":%q}}}`+"\n", p.ID, p.Tab)
 	case "pane close":
-		p := find(args[2])
-		if p.PID > 0 {
-			syscall.Kill(-p.PID, syscall.SIGKILL)
-		}
-		p.Closed = true
-		save(panes)
+		fmt.Fprintln(os.Stderr, "pane.close is forbidden")
+		os.Exit(2)
 	default:
 		fmt.Fprintln(os.Stderr, "unsupported", args)
 		os.Exit(2)
@@ -92,6 +114,17 @@ func load() []pane {
 	var panes []pane
 	body, _ := os.ReadFile(filepath.Join(dir, "panes.json"))
 	json.Unmarshal(body, &panes)
+	changed := false
+	for i := range panes {
+		p := &panes[i]
+		if !p.Closed && p.PID != 0 && p.Start != "" && (proc.Identity{PID: p.PID, Start: p.Start}).Probe() == "exited" {
+			p.Closed = true
+			changed = true
+		}
+	}
+	if changed {
+		save(panes)
+	}
 	return panes
 }
 

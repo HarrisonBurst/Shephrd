@@ -22,10 +22,23 @@ func (x *Executor) Reconcile(ctx context.Context) (*Reconciled, error) {
 	}
 	for _, a := range attempts {
 		state := x.classifyAllocation(ctx, a)
-		if err := x.write(ctx, func(tx *store.Tx) error { return coord.SetWorkspaceState(tx, "system", a, state, "") }); err != nil {
+		applied := false
+		if err := x.write(ctx, func(tx *store.Tx) error {
+			current, err := coord.LoadAttempt(tx, a.Task, a.N)
+			if err != nil || current.WorkspaceState != "allocating" {
+				return err
+			}
+			if err := coord.SetWorkspaceState(tx, "system", current, state, ""); err != nil {
+				return err
+			}
+			applied = true
+			return nil
+		}); err != nil {
 			return nil, err
 		}
-		out.Workspaces = append(out.Workspaces, map[string]string{"task": coord.TaskRef(a.Task), "path": a.Workspace, "state": state})
+		if applied {
+			out.Workspaces = append(out.Workspaces, map[string]string{"task": coord.TaskRef(a.Task), "path": a.Workspace, "state": state})
+		}
 	}
 	runs, err := coord.Runs(x.DB, `liveness IN ('starting', 'live', 'unknown')`)
 	if err != nil {

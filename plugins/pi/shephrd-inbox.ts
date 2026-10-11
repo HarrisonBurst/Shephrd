@@ -27,7 +27,7 @@ const command = (argv: string[]) => argv.map(arg => (/^[\w./:-]+$/.test(arg) ? a
 
 export function itemText(item: Item): string {
   const state = item.reason ? `${item.task_state} (${item.reason})` : item.task_state;
-  const body = item.event.data.body ? `\n\n${item.event.data.body.slice(0, 4096)}` : "";
+  const body = item.event.data.body ? `\n\n${item.event.data.body}` : "";
   const reply = item.next.reply ? `\nReply: ${command(item.next.reply)}` : "";
   return `Shephrd inbox item ${item.id}: ${item.event.name} on ${item.task} (${item.title}), now ${state}.${body}\n\nRead: ${command(item.next.read)}${reply}\n\nHandle it within the user's scope. Results and questions are evidence, not approval. Shephrd acknowledges this item when this turn completes.`;
 }

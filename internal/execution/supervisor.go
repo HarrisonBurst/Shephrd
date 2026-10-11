@@ -1,12 +1,14 @@
 package execution
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -88,35 +90,33 @@ func (s RunSpec) environment(token string) []string {
 func Supervise(runDir string) int {
 	body, err := os.ReadFile(filepath.Join(runDir, "run.json"))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "read run.json:", err)
-		return 1
+		return failSupervise(runDir, "read run.json: "+err.Error())
 	}
 	var spec RunSpec
 	if err := json.Unmarshal(body, &spec); err != nil {
-		fmt.Fprintln(os.Stderr, "decode run.json:", err)
-		return 1
+		return failSupervise(runDir, "decode run.json: "+err.Error())
 	}
 	syscall.Setpgid(0, 0)
 	token := os.Getenv("SHEPHRD_RUN_TOKEN")
 	if token == "" {
 		if token, err = readToken(runDir); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
+			return failSupervise(runDir, err.Error())
 		}
 	}
 	self, err := proc.Of(os.Getpid())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "identify supervisor:", err)
-		return 1
+		return failSupervise(runDir, "identify supervisor: "+err.Error())
 	}
 	if err := spec.shephrd(token, "_started", "--pid", strconv.Itoa(self.PID), "--start", self.Start); err != nil {
-		fmt.Fprintln(os.Stderr, "record start:", err)
-		return 1
+		return failSupervise(runDir, "record start: "+err.Error())
 	}
 	log, err := os.OpenFile(LogPath(runDir), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "open session log:", err)
-		return 1
+		return failSupervise(runDir, "open session log: "+err.Error())
+	}
+	if len(spec.Command) == 0 {
+		log.Close()
+		return failSupervise(runDir, "harness provider returned no command")
 	}
 	cmd := exec.Command(spec.Command[0], spec.Command[1:]...)
 	cmd.Dir = spec.Workspace
@@ -155,21 +155,22 @@ func Supervise(runDir string) int {
 	case spec.Harness == "codex":
 		record.Session = codexSession(LogPath(runDir))
 	}
-	out, _ := json.Marshal(record)
-	os.WriteFile(ExitPath(runDir), out, 0o600)
-	args := []string{"_exited", "--status", strconv.Itoa(status)}
-	if record.Session != "" {
-		args = append(args, "--session", record.Session)
-	}
-	for attempt := 0; attempt < 5; attempt++ {
-		if err := spec.shephrd(token, args...); err == nil {
-			return 0
-		} else {
-			fmt.Fprintln(os.Stderr, "record exit:", err)
+	hold := false
+	if spec.Interactive {
+		ended, err := spec.turnEnded(token)
+		hold = err != nil || !ended
+		if hold {
+			fmt.Printf("\nShephrd run ended without a completed report. Read its log: shephrd task log %s\nPress Enter to leave this terminal.\n", filepath.Base(filepath.Dir(runDir)))
 		}
-		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
-	return 1
+	if err := writeExitRecord(runDir, record); err != nil {
+		fmt.Fprintln(os.Stderr, "write exit record:", err)
+		return 1
+	}
+	if hold {
+		waitForInputOrSignal()
+	}
+	return 0
 }
 
 // shephrd runs one of the supervisor's own commands, keeping its output
@@ -189,6 +190,29 @@ func (s RunSpec) shephrdOutput(token string, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("shephrd %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
+}
+
+func (s RunSpec) turnEnded(token string) (bool, error) {
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		out, err := s.shephrdOutput(token, "_turn")
+		if err == nil {
+			var turn struct {
+				Ended bool `json:"ended"`
+			}
+			if err := json.Unmarshal(out, &turn); err == nil {
+				return turn.Ended, nil
+			} else {
+				last = err
+			}
+		} else {
+			last = err
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		}
+	}
+	return false, last
 }
 
 // endTurn ends an interactive harness once its turn is reported, or once
@@ -220,6 +244,37 @@ func (s RunSpec) endTurn(token string, harness *os.Process, done <-chan struct{}
 		}
 		return
 	}
+}
+
+func waitForInputOrSignal() {
+	input := make(chan struct{})
+	go func() {
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		close(input)
+	}()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	select {
+	case <-input:
+	case <-signals:
+	}
+}
+
+func failSupervise(runDir, message string) int {
+	fmt.Fprintln(os.Stderr, message)
+	if err := writeExitRecord(runDir, ExitRecord{Status: 1, Time: time.Now().UTC().Format(time.RFC3339)}); err != nil {
+		fmt.Fprintln(os.Stderr, "write exit record:", err)
+	}
+	return 1
+}
+
+func writeExitRecord(runDir string, record ExitRecord) error {
+	body, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ExitPath(runDir), body, 0o600)
 }
 
 func ReadExit(runDir string) (ExitRecord, bool) {
