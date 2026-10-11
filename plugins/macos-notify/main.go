@@ -36,7 +36,10 @@ func main() {
 			continue
 		}
 		title, reason := describe(e.Task)
-		message := fmt.Sprintf("%s: %s", e.Task, title)
+		message := strings.TrimSpace(title)
+		if message == "" {
+			message = e.Task
+		}
 		subtitle := fmt.Sprintf("Inbox item %d for %s", e.Data.Item, e.Data.Driver)
 		if reason != "" {
 			subtitle += " (" + reason + ")"
@@ -53,7 +56,7 @@ func main() {
 func describe(task string) (string, string) {
 	out, err := exec.Command("shephrd", "task", "show", task, "--events", "1").Output()
 	if err != nil {
-		return "needs attention", ""
+		return "", ""
 	}
 	var shown struct {
 		Task struct {
@@ -63,7 +66,7 @@ func describe(task string) (string, string) {
 		} `json:"task"`
 	}
 	if json.Unmarshal(out, &shown) != nil {
-		return "needs attention", ""
+		return "", ""
 	}
 	return shown.Task.Title, strings.TrimSpace(shown.Task.State + " " + shown.Task.Reason)
 }

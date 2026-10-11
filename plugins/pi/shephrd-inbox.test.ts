@@ -41,6 +41,17 @@ async function turn(h: ReturnType<typeof harness>, text: string, stopReason: str
   await h.handlers.agent_settled({});
 }
 
+test("uses the human-readable task title in the inbox turn", () => {
+  const text = itemText(item(1));
+  assert.match(text, /on Build the feature,/);
+  assert.doesNotMatch(text, /on t_1 \(/);
+  assert.match(text, /task show t_1/);
+});
+
+test("falls back to the task ID when the title is empty", () => {
+  assert.match(itemText({ ...item(1), title: "" }), /on t_1,/);
+});
+
 test("keeps the full bounded report body in the turn", () => {
   const body = "x".repeat(5000);
   const longItem = { ...item(1), event: { ...item(1).event, data: { body } } };

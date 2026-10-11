@@ -703,9 +703,12 @@ func (x *Executor) Log(ctx context.Context, r *coord.Run, limit int64) (LogRespo
 	return out, host.Call(ctx, "read_log", RunDirRequest{RunDir: r.Dir, Limit: limit}, &out)
 }
 
-// TabLabel names a task's terminal for people: its ID, role and title.
+// TabLabel names a task's terminal for people.
 func TabLabel(t *coord.Task) string {
-	label := t.Ref + " " + t.Role + " · " + t.Title
+	label := strings.TrimSpace(t.Title)
+	if label == "" {
+		label = t.Ref
+	}
 	if runes := []rune(label); len(runes) > 60 {
 		label = strings.TrimSpace(string(runes[:59])) + "…"
 	}

@@ -67,7 +67,7 @@ The main driver's job is to understand the user and keep the conversation moving
 - **Cross-repository work** is one sub-driver per repository. When one must follow another, express it as a dependency between the sub-driver tasks.
 - **Handle the inbox.**
   - Questions: answer from context or ask the user, then reply with `task send --reply-to`.
-  - Results: surface the substantive report content to the user, including findings, outcomes and important caveats; read referenced artifacts when the summary is insufficient. Do not substitute a generic completion notice.
+  - Results: surface the substantive report content to the user, including findings, outcomes and important caveats; read referenced artifacts when the summary is insufficient. Refer to a task by its human-readable title in the answer, adding its stable `t_N` ID only when titles are ambiguous or an exact command needs it. Do not substitute a generic completion notice.
   - Held tasks: inspect them and decide with the user.
   - Check the current `task_state` and all request states before calling work complete. A result answers one request; a reused sub-driver is `done` only after every request is answered and its turn settles.
   - Keep an owned sub-driver open while it may be reused. Deliver it only when its work is finished and its children are closed. `task deliver` accepts report and answer results without a grant; code delivery needs a `land` grant, and a standing `land` grant is prior user authorization. Discarding work needs a `discard` grant plus explicit per-action user approval, even when the grant is standing. Code in pull-request mode remains `done` awaiting merge until the pull request is merged and proved.

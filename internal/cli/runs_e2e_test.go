@@ -317,6 +317,9 @@ func TestSkillsPrintGuidanceAsConfigured(t *testing.T) {
 	if strings.Contains(main, "## Reference: recovery") || !strings.Contains(main, "recovery") {
 		t.Fatalf("main skill sections: %s", main)
 	}
+	if !strings.Contains(main, "human-readable title") || !strings.Contains(main, "stable `t_N` ID") {
+		t.Fatalf("main task reference guidance: %s", main)
+	}
 	if section := env.OK("skill", "main", "--section", "recovery")["text"].(string); !strings.Contains(section, "task resume") {
 		t.Fatalf("recovery section: %s", section)
 	}
