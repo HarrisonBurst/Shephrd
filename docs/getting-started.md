@@ -10,7 +10,7 @@ This guide sets Shephrd up on one machine, then across three. The [system design
 shephrd init
 ```
 
-This writes `~/.config/shephrd/config.toml`, creates the store, and makes this machine the home host. The configuration names your main driver `main` and grants it `land` and `discard`, so it can deliver code in its own trees; discarding still needs explicit per-action user approval.
+This writes `~/.config/shephrd/config.toml`, creates the store, and makes this machine the home host. The configuration names your main driver `main` and grants it `land` and `discard`, so it can accept and land code in its own trees; discarding still needs explicit per-action user approval.
 
 Choose a default harness and model:
 
@@ -75,7 +75,7 @@ extend = "/path/to/house-rules.md"
 
 ### Receive results
 
-Results, questions and held tasks reach the main driver's inbox. Read each report and any referenced artifacts, share the findings with the user, then acknowledge the item. Check `shephrd task show` before calling work complete: a reused sub-driver is done only after all requests are answered. Deliver report or answer tasks without a grant; code delivery needs `land`, and a standing `land` grant is prior authorization. Discarding needs `discard` plus explicit per-action user approval, even with a standing grant. Code in pull-request mode stays done until the pull request merges. To have inbox items pushed, configure a delivery for the driver:
+Results, questions and held tasks reach the main driver's inbox. Read each report and any referenced artifacts, share the findings with the user, then acknowledge the item. Check `shephrd task show` before calling work complete: a reused sub-driver is done only after all requests are answered. Accept report or answer tasks with `shephrd task accept <task>` without a grant; `task deliver` remains a compatibility alias. A sub-driver accepts its own children, and the main driver accepts only the parent once every child is closed, including done code awaiting merge. Accepting code can land it and needs `land`, and a standing `land` grant is prior authorization. Discarding needs `discard` plus explicit per-action user approval, even with a standing grant. Code in pull-request mode stays done until the pull request merges. To have inbox items pushed, configure a delivery for the driver:
 
 ```toml
 [drivers.main.delivery]
