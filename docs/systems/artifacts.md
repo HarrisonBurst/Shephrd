@@ -129,7 +129,7 @@ Code is delivered only when core proves it is on the default branch:
 
 ## Discard and release
 
-- **Discard:** `task discard <task>` closes a task as `discarded` and removes its workspaces even if they hold uncommitted changes. Committed work survives on its branches. This needs the `discard` grant and explicit per-action user approval, even with a standing `discard` grant. A delegated grant records that approval in its reason. Cancelling a task that never started needs no grant.
+- **Discard:** `task discard <task>` closes a task as `discarded` and removes its workspaces even if they hold uncommitted changes. Committed work survives on its branches. This needs the `discard` grant and explicit per-action user approval, even with a standing `discard` grant. A delegated grant records that approval in its reason for the specific action; it does not blanket-approve later discards in its subtree. Cancelling a task that never started needs no grant.
 - **Release:** when a task closes, session execution removes each of its attempts' workspaces that are clean, after re-verifying identity and that no process is live. Report files already sealed from the workspace do not count as changes, since their snapshots are kept. A workspace with other uncommitted changes stays held, and its owner gets an inbox item or a continuation turn naming it. Removing it then needs `task discard --attempt <n>`.
 - Branches are never deleted, and every artifact, proof and event survives.
 
