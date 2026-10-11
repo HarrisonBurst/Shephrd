@@ -26,9 +26,10 @@ import (
 )
 
 const (
-	turnGrace     = 30 * time.Second
-	maxDeliveries = 20
-	reconcileEach = 5 * time.Minute
+	turnGrace             = 30 * time.Second
+	presentationHoldGrace = 5 * time.Second
+	maxDeliveries         = 20
+	reconcileEach         = 5 * time.Minute
 )
 
 type Daemon struct {
@@ -200,6 +201,11 @@ func (d *Daemon) observe(ctx context.Context, x *execution.Executor, cfg *config
 		if host, err := x.Host(r.Host); err == nil {
 			var exit execution.ExitResponse
 			if host.Call(ctx, "exit_record", execution.RunDirRequest{RunDir: r.Dir}, &exit) == nil && exit.Found {
+				if !r.TurnReported && r.Endpoint != "" {
+					if ended, err := time.Parse(time.RFC3339Nano, exit.Record.Time); err == nil && time.Since(ended) < presentationHoldGrace {
+						continue
+					}
+				}
 				if r.TurnReported {
 					reason = "turn_ended"
 				} else {

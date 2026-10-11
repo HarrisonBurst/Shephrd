@@ -36,7 +36,9 @@ func (h *livenessHost) Call(_ context.Context, op string, _, resp any) error {
 	case "presentation":
 		resp.(*PresentationResponse).State = h.presentation
 	case "stop":
-		resp.(*StateResponse).State = "exited"
+		if h.probe == "live" || h.probe == "exited" {
+			resp.(*StateResponse).State = "exited"
+		}
 	}
 	return nil
 }

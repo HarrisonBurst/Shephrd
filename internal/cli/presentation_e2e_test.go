@@ -52,6 +52,26 @@ func herdrPanes(env *testkit.Env) []map[string]any {
 	return panes
 }
 
+func waitStateFromDaemon(t *testing.T, env *testkit.Env, ref, state string) map[string]any {
+	var task map[string]any
+	env.Eventually(ref+" "+state, func() bool {
+		shown := env.Run("", "task", "show", ref)
+		if shown.Code != 0 {
+			return false
+		}
+		task = shown.JSON(t)["task"].(map[string]any)
+		if task["state"] != state {
+			return false
+		}
+		log := env.Run("", "task", "log", ref)
+		if log.Code != 0 {
+			return true
+		}
+		return log.JSON(t)["run"].(map[string]any)["liveness"] == "exited"
+	})
+	return task
+}
+
 func TestSessionsRunInAPresentation(t *testing.T) {
 	env := withHerdr(t)
 	env.AppendConfig("[repos.api.landing]\nmode = \"direct\"\nmethod = \"fast-forward\"")
@@ -136,6 +156,7 @@ func TestUnreportedPresentedRunHoldsUntilEnter(t *testing.T) {
 	env.Script(map[string][][]action{"t_1": {{{"exit": 0}}, {{"exit": 0}}}})
 	env.OK("task", "create", "--repo", "api", "--objective", "Work")
 	env.OK("task", "start", "t_1")
+	env.StartDaemon()
 	env.Eventually("a task-log hint in the terminal", func() bool {
 		shown, _ := os.ReadFile(filepath.Join(env.Home, ".fakeherdr", "p1.log"))
 		return strings.Contains(string(shown), "shephrd task log t_1")
@@ -156,8 +177,7 @@ func TestUnreportedPresentedRunHoldsUntilEnter(t *testing.T) {
 	env.Eventually("the unreported terminal to close on Enter", func() bool {
 		return herdrPanes(env)[0]["closed"] == true
 	})
-	env.StartDaemon()
-	env.WaitState("t_1", "held")
+	waitStateFromDaemon(t, env, "t_1", "held")
 }
 
 func TestTaskCloseWaitsForTheSupervisorBeforeReleasing(t *testing.T) {
@@ -217,7 +237,7 @@ func TestFailedHarnessStartKeepsItsTerminalForInspection(t *testing.T) {
 	input.Write([]byte("\n"))
 	input.Close()
 	env.StartDaemon()
-	env.WaitState("t_1", "held")
+	waitStateFromDaemon(t, env, "t_1", "held")
 }
 
 func TestStoppingBeforeSupervisorStartRefusesItsHarness(t *testing.T) {

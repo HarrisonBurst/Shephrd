@@ -359,48 +359,47 @@ func SetLivenessAndWake(tx *store.Tx, r *Run, liveness string) error {
 	return WakeOwner(tx, t, seq)
 }
 
-// RecordExit marks a run exited and applies what its exit means. It
-// reports whether the run needs its one nudge.
-func RecordExit(tx *store.Tx, r *Run, status int, session string) (bool, error) {
+// RecordExit marks a run exited and applies what its exit means.
+func RecordExit(tx *store.Tx, r *Run, status int, session string) error {
 	if r.Liveness == "exited" {
-		return false, nil
+		return nil
 	}
 	now := store.Timestamp(tx.Now)
 	if _, err := tx.Exec(`UPDATE runs SET liveness = 'exited', exit_status = ?, exited_at = ? WHERE id = ?`, status, now, r.ID); err != nil {
-		return false, err
+		return err
 	}
 	r.Liveness, r.ExitStatus, r.Exited = "exited", &status, now
 	if session != "" {
 		if _, err := tx.Exec(`UPDATE attempts SET session = ? WHERE task = ? AND n = ?`, session, r.Task, r.Attempt); err != nil {
-			return false, err
+			return err
 		}
 	}
 	if _, err := tx.Emit("run.exited", "system", r.Task, r.Attempt, r.ID, map[string]any{
 		"run": r.Generation, "status": status, "reported": r.TurnReported,
 	}); err != nil {
-		return false, err
+		return err
 	}
 	t, err := Load(tx, r.Task)
 	if err != nil {
-		return false, err
+		return err
 	}
 	current, err := CurrentRun(tx, t)
 	if err != nil || current == nil || current.ID != r.ID || r.StopReason != "" {
-		return false, err
+		return err
 	}
 	if r.TurnReported {
 		if t.Role == "driver" && t.State == "running" {
-			return false, SettleDriver(tx, t)
+			return SettleDriver(tx, t)
 		}
-		return false, nil
+		return nil
 	}
 	if t.State != "running" && t.State != "waiting" {
-		return false, nil
+		return nil
 	}
 	if r.Purpose == "nudge" {
-		return false, Hold(tx, t, "no_report")
+		return Hold(tx, t, "no_report")
 	}
-	return true, nil
+	return nil
 }
 
 // SettleDriver sets a driver task's state between turns from its requests.

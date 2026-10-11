@@ -523,8 +523,8 @@ func Cancel(tx *store.Tx, c Caller, t *Task) error {
 		return err
 	}
 	if t.State != "queued" && (t.State != "held" || holding > 0) {
-		return fault.New("invalid_state", "%s is %s with work to lose; discard it instead", t.Ref, t.State).
-			WithNext("task", "discard", t.Ref)
+		return fault.New("invalid_state", "%s is %s with work to lose; inspect it before deciding whether to discard", t.Ref, t.State).
+			WithNext("task", "show", t.Ref)
 	}
 	return Close(tx, c.String(), t, "cancelled")
 }

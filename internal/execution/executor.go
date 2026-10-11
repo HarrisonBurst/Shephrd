@@ -312,7 +312,7 @@ func (x *Executor) abandon(ctx context.Context, run *coord.Run, reason string) {
 			return err
 		}
 		run.StopReason = reason
-		if _, err := coord.RecordExit(tx, run, -1, ""); err != nil {
+		if err := coord.RecordExit(tx, run, -1, ""); err != nil {
 			return err
 		}
 		t, err := coord.Load(tx, run.Task)
@@ -397,7 +397,7 @@ func (x *Executor) Exited(ctx context.Context, runID int64, status int, session 
 		if err != nil {
 			return err
 		}
-		_, err = coord.RecordExit(tx, r, status, session)
+		err = coord.RecordExit(tx, r, status, session)
 		return err
 	})
 }
@@ -477,7 +477,7 @@ func (x *Executor) Probe(ctx context.Context, r *coord.Run) (string, error) {
 		if r.StopReason == "" {
 			r.StopReason = "lost"
 		}
-		if _, err := coord.RecordExit(tx, r, -1, ""); err != nil {
+		if err := coord.RecordExit(tx, r, -1, ""); err != nil {
 			return err
 		}
 		t, err := coord.Load(tx, r.Task)
@@ -502,7 +502,7 @@ func (x *Executor) recordUnidentifiedExit(ctx context.Context, r *coord.Run, rec
 		if current.PID != 0 || current.Liveness == "exited" {
 			return nil
 		}
-		if _, err := coord.RecordExit(tx, current, record.Status, record.Session); err != nil {
+		if err := coord.RecordExit(tx, current, record.Status, record.Session); err != nil {
 			return err
 		}
 		applied = true
@@ -553,16 +553,6 @@ func (x *Executor) stopGroup(ctx context.Context, r *coord.Run) bool {
 		r.PID, r.Start = fresh.PID, fresh.Start
 	}
 	if r.PID == 0 || r.Start == "" {
-		return false
-	}
-	var identity StateResponse
-	if err := host.Call(ctx, "probe", proc.Identity{PID: r.PID, Start: r.Start}, &identity); err != nil {
-		return false
-	}
-	if identity.State == "exited" {
-		return true
-	}
-	if identity.State != "live" {
 		return false
 	}
 	var state StateResponse
@@ -620,7 +610,7 @@ func (x *Executor) Stop(ctx context.Context, t *coord.Task, reason string) (*coo
 	}
 	err = x.write(ctx, func(tx *store.Tx) error {
 		if r != nil && r.Liveness != "exited" {
-			if _, err := coord.RecordExit(tx, r, -1, session); err != nil {
+			if err := coord.RecordExit(tx, r, -1, session); err != nil {
 				return err
 			}
 		}
@@ -697,7 +687,7 @@ func (x *Executor) Abandon(ctx context.Context, t *coord.Task) (*coord.Run, erro
 			return err
 		}
 		current.StopReason = "abandoned"
-		_, err = coord.RecordExit(tx, current, -1, "")
+		err = coord.RecordExit(tx, current, -1, "")
 		return err
 	})
 	return r, err

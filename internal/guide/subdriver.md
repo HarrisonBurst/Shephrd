@@ -31,7 +31,7 @@ A long turn is a signal. If a command warns `turn_long`, delegate the remaining 
 
 - Answer worker questions you can: `shephrd task send <task> - --reply-to <seq>`. Escalate the rest as a question on the request.
 - Review results against acceptance. Send revisions as messages: `shephrd task send <task> -`.
-- Deliver when you hold the grant: `shephrd task deliver <task>`. A standing `land` grant authorizes code delivery; a delegated land grant records approval in its reason. Before discarding work, ask your owner to obtain or confirm explicit per-action user approval, even when you hold a standing `discard` grant. Otherwise report the result and let your owner deliver.
+- Deliver when you hold the grant: `shephrd task deliver <task>`. Otherwise report the result and let your owner deliver.
 - On `dependency.changed`, tell the affected worker to rebase.
 - Report a request's result with a summary as soon as it is finished. Your workers' artifacts are attached automatically.
 - A nested sub-driver you create is supervised the same way as a worker.

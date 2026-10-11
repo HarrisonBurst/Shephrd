@@ -92,7 +92,7 @@ func TestObserveUsesExitRecordForReportedDriver(t *testing.T) {
 	if err != nil || current.Liveness != "exited" || current.StopReason != "turn_ended" {
 		t.Fatalf("run: %+v, %v", current, err)
 	}
-	if len(host.calls) < 5 || host.calls[0] != "probe" || host.calls[1] != "exit_record" {
+	if len(host.calls) != 4 || host.calls[0] != "probe" || host.calls[1] != "exit_record" || host.calls[2] != "stop" || host.calls[3] != "exit_record" {
 		t.Fatalf("host calls: %v", host.calls)
 	}
 }

@@ -66,7 +66,7 @@ func (x *Executor) Interrupt(ctx context.Context, r *coord.Run, reason string) e
 	}
 	session := x.stoppedSession(ctx, r)
 	if _, err := x.run(ctx, r.Task, "nudge", func(tx *store.Tx, t *coord.Task) (bool, error) {
-		if _, err := coord.RecordExit(tx, r, -1, session); err != nil {
+		if err := coord.RecordExit(tx, r, -1, session); err != nil {
 			return false, err
 		}
 		switch {
