@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestCodexInteractiveCommandUsesForegroundCLI(t *testing.T) {
+func TestCodexInteractiveCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		request HarnessRequest
@@ -14,10 +14,10 @@ func TestCodexInteractiveCommandUsesForegroundCLI(t *testing.T) {
 		{
 			name: "new",
 			request: HarnessRequest{
-				Mode: "start", Interactive: true, Workspace: "/workspace", Prompt: "brief",
+				Mode: "start", Interactive: true, Workspace: "/workspace", Model: "gpt-5", Prompt: "brief",
 			},
 			want: []string{
-				"codex", "--dangerously-bypass-approvals-and-sandbox", "-C", "/workspace", "brief",
+				"codex", "--model", "gpt-5", "--dangerously-bypass-approvals-and-sandbox", "-c", `sandbox_mode="danger-full-access"`, "-C", "/workspace", "brief",
 			},
 		},
 		{
@@ -26,16 +26,12 @@ func TestCodexInteractiveCommandUsesForegroundCLI(t *testing.T) {
 				Mode: "resume", Interactive: true, Session: "session", Prompt: "brief",
 			},
 			want: []string{
-				"codex", "resume", "--dangerously-bypass-approvals-and-sandbox", "session", "brief",
+				"codex", "resume", "--dangerously-bypass-approvals-and-sandbox", "-c", `sandbox_mode="danger-full-access"`, "session", "brief",
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := codex(tc.request).Command
-			if slices.Contains(got, "--no-daemon") {
-				t.Fatalf("unsupported Codex flag in command: %v", got)
-			}
-			if !slices.Equal(got, tc.want) {
+			if got := codex(tc.request).Command; !slices.Equal(got, tc.want) {
 				t.Fatalf("command = %v, want %v", got, tc.want)
 			}
 		})
