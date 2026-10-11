@@ -95,9 +95,7 @@ func codex(r HarnessRequest) HarnessCommand {
 		args = append(args, "--model", r.Model)
 	}
 	args = append(args, "--dangerously-bypass-approvals-and-sandbox")
-	if r.Interactive {
-		args = append(args, "--no-daemon")
-	} else {
+	if !r.Interactive {
 		args = append(args, "--json")
 	}
 	if r.Mode == "resume" {
