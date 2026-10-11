@@ -91,7 +91,7 @@ func TestSessionsRunInAPresentation(t *testing.T) {
 		t.Fatalf("the harness did not run its own UI on the brief: %v", call["args"])
 	}
 	panes := herdrPanes(env)
-	if len(panes) != 1 || panes[0]["label"] != "t_1 worker · Fix it" || strings.Contains(panes[0]["command"].(string), envOf(call)["SHEPHRD_RUN_TOKEN"]) {
+	if len(panes) != 1 || panes[0]["label"] != "Fix it" || strings.Contains(panes[0]["command"].(string), envOf(call)["SHEPHRD_RUN_TOKEN"]) {
 		t.Fatalf("pane: %v", panes)
 	}
 	if _, err := os.Stat(filepath.Join(run["dir"].(string), "token")); !os.IsNotExist(err) {

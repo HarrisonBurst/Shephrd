@@ -34,6 +34,6 @@ package = "firstparty"`)
 	env.OK("task", "start", "t_1")
 	env.Eventually("a notification", func() bool {
 		body, _ := os.ReadFile(log)
-		return strings.Contains(string(body), `t_1: Pick a \"version\"`) && strings.Contains(string(body), "waiting")
+		return strings.Contains(string(body), `Pick a \"version\"`) && !strings.Contains(string(body), `t_1: Pick a`) && strings.Contains(string(body), "waiting")
 	})
 }

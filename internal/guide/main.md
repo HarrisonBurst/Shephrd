@@ -25,7 +25,7 @@ Every `shephrd` command prints one JSON object. Errors print `{"error": {...}}` 
 Shephrd pushes new items to you as they arrive. `shephrd inbox` lists what is pending.
 
 - **Question:** answer from context or ask the user, then `shephrd task send <task> - --reply-to <seq>`.
-- **Result:** tell the user what the report actually says: substantive findings, work completed and important caveats, not just that a sub-driver finished. Read referenced content with `shephrd artifact read <id>` when the summary alone is insufficient.
+- **Result:** tell the user what the report actually says: substantive findings, work completed and important caveats, not just that a sub-driver finished. Refer to the task by its human-readable title; include its stable `t_N` ID only when titles are ambiguous or an exact command needs it. Read referenced content with `shephrd artifact read <id>` when the summary alone is insufficient.
 - **Held task:** inspect it with `shephrd task show <task>` and decide with the user.
 - Before calling work complete, inspect `task_state` and all request states in `shephrd task show <task>`. A result answers one request; a reused sub-driver is `done` only after every request is answered and its turn settles.
 - Keep a sub-driver task open while it may be reused. Deliver it only when its work is finished and its children are closed. `shephrd task deliver <task>` accepts report and answer results without a grant; code delivery needs a `land` grant. In pull-request mode the task remains `done` awaiting merge until the pull request is merged and proved.
