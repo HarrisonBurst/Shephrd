@@ -53,7 +53,7 @@ Pinned inputs never change. If a dependency changes afterwards, the dependent ta
 `task accept <task>` is the canonical verb for accepting a done task; `task deliver <task>` remains a CLI compatibility alias with identical gates and effects:
 
 - **Report or answer:** the direct owner reviews and accepts the current result. The task closes as `accepted`. No grant is needed, because nothing irreversible happens: the snapshot already exists.
-- **Code:** the direct owner explicitly invokes acceptance, which lands the sealed commit using the repository's landing mode and proves it. This needs the `land` grant in every mode, because every mode publishes code. A standing `land` grant is prior user authorization; a delegated grant records approval in its reason. Core checks the grant, not a separate approval field. In pull-request mode, publishing alone does not accept the task.
+- **Code:** `task accept` lands the sealed commit using the repository's landing mode and proves it. This needs the `land` grant in every mode, because every mode publishes code. A standing `land` grant is prior user authorization; a delegated grant records approval in its reason. Core checks the grant, not a separate approval field. Code already merged outside Shephrd can instead close as `accepted` through `task verify` after core proves it is on the default branch; verification does not publish code or require a `land` grant. In pull-request mode, publishing alone does not accept the task.
 
 A sub-driver reviews and accepts its own report/answer children and verified merged code children; the main driver accepts only the sub-driver parent. Neither reporting a parent result nor accepting it accepts, lands or discards a child. A driver task can close only after every direct child is closed, including done unmerged code. Active, waiting or questioned children must be resolved by their owner or escalated upstream, never closed automatically. Obsolete unmerged code stays open until proven merged or individually approved for discard; there is no superseded auto-close.
 
@@ -61,7 +61,7 @@ A sub-driver reviews and accepts its own report/answer children and verified mer
 
 Every deliverable passes two milestones. [Dependencies](coordination.md#dependencies) wait for one of them.
 
-| Deliverable | Published | Merged, which permits acceptance |
+| Deliverable | Published | Merged, with accepted closure on proof |
 |---|---|---|
 | Report or answer | The owner accepted it | Same moment |
 | Code, `direct` mode | Merged into the default branch | Same moment |

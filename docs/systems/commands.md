@@ -44,7 +44,7 @@ A request is argv plus optional stdin.
 
 - **Long text comes from stdin**, named with `-`, for example `task create --objective -`. File paths are never part of the contract, because they mean nothing on another host.
 - **Identity comes from context**, never from argv over SSH. See [identity](#identity-and-authorization).
-- **`--key`** is accepted by every mutating command. The CLI generates one when absent, and the transport reuses it on retry.
+- **`--key`** is accepted by every mutating command. The CLI generates one when absent, and the transport reuses it on retry. The idempotency digest includes argv: retry with the same verb, since reusing a key across `task accept` and its `task deliver` alias conflicts.
 - **`--if-revision <n>`** is an optional optimistic check on mutations of an existing task.
 - **Sizes are bounded** per field. Oversize input is refused, never truncated.
 

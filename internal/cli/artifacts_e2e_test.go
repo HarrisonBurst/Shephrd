@@ -295,18 +295,25 @@ func TestSubDriverAcceptsChildrenBeforeParent(t *testing.T) {
 
 func TestWaitingChildDoesNotCloseWithParent(t *testing.T) {
 	env, _ := withHarness(t)
+	env.AppendConfig("[timeouts]\nsettle = \"300ms\"")
 	env.Script(map[string][][]action{
-		"t_1": {{
-			{"shephrd": []string{"task", "create", "--repo", "api", "--objective", "Investigate", "--deliverable", "report"}},
-			{"shephrd": []string{"task", "start", "t_2"}},
-			{"report": []string{"result", "Investigation needs an answer"}},
-		}},
+		"t_1": {
+			{
+				{"shephrd": []string{"task", "create", "--repo", "api", "--objective", "Investigate", "--deliverable", "report"}},
+				{"shephrd": []string{"task", "start", "t_2"}},
+				{"report": []string{"result", "Investigation needs an answer"}},
+				{"report": []string{"note", "Waiting for the child's question to be resolved"}},
+			},
+			{{"report": []string{"note", "Child still needs an answer"}}},
+		},
 		"t_2": {{{"report": []string{"question", "Which behavior?"}}}},
 	})
 	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")
 	env.OK("task", "start", "t_1")
 	env.WaitState("t_2", "waiting")
-	env.Refused("invalid_state", "task", "accept", "t_1")
+	env.StartDaemon()
+	env.WaitState("t_1", "done")
+	env.Refused("open_children", "task", "accept", "t_1")
 	if task := env.Task("t_2"); task["state"] != "waiting" {
 		t.Fatalf("waiting child was closed: %v", task)
 	}
