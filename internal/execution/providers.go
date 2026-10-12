@@ -69,7 +69,18 @@ func (x *Executor) Interrupt(ctx context.Context, r *coord.Run, reason string) e
 		if err := coord.RecordExit(tx, r, -1, session); err != nil {
 			return false, err
 		}
+		if r.TurnReported && (reason == "no_report" || reason == "inactive") {
+			if _, err := tx.Exec(`UPDATE runs SET stop_reason = 'turn_ended' WHERE id = ?`, r.ID); err != nil {
+				return false, err
+			}
+			r.StopReason = "turn_ended"
+		}
 		switch {
+		case r.TurnReported && (reason == "no_report" || reason == "inactive"):
+			if t.Role == "driver" && t.State == "running" {
+				return false, coord.SettleDriver(tx, t)
+			}
+			return false, nil
 		case reason == "turn_ended" && t.Role == "driver" && t.State == "running":
 			return false, coord.SettleDriver(tx, t)
 		case (reason != "inactive" && reason != "no_report") || (t.State != "running" && t.State != "waiting"):
