@@ -44,7 +44,7 @@ A request is argv plus optional stdin.
 
 - **Long text comes from stdin**, named with `-`, for example `task create --objective -`. File paths are never part of the contract, because they mean nothing on another host.
 - **Identity comes from context**, never from argv over SSH. See [identity](#identity-and-authorization).
-- **`--key`** is accepted by every mutating command. The CLI generates one when absent, and the transport reuses it on retry.
+- **`--key`** is accepted by every mutating command. The CLI generates one when absent, and the transport reuses it on retry. The idempotency digest includes argv: retry with the same verb, since reusing a key across `task accept` and its `task deliver` alias conflicts.
 - **`--if-revision <n>`** is an optional optimistic check on mutations of an existing task.
 - **Sizes are bounded** per field. Oversize input is refused, never truncated.
 
@@ -151,7 +151,7 @@ Each command's behavior is defined by the spec named in its row.
 | `host list` | Hosts with reachability, version and installed providers | [Execution](execution.md) |
 | `report progress`, `question`, `result`, `blocker`, `note` | A run reports on its own task | [Notification](notifications.md) |
 | `inbox`, `inbox ack`, `inbox wait` | A driver reads, acknowledges, or streams items needing attention | [Notification](notifications.md) |
-| `task deliver`, `task verify`, `task discard` | Accept or land a result, re-check landing proof, discard work | [Artifacts](artifacts.md) |
+| `task accept` (`task deliver` compatibility alias), `task verify`, `task discard` | Accept or land a result, re-check landing proof, discard work | [Artifacts](artifacts.md) |
 | `grant`, `grant revoke` | Delegate or revoke `land` and `discard` authority | [Artifacts](artifacts.md) |
 | `artifact show`, `artifact read` | Read an artifact's metadata or bytes | [Artifacts](artifacts.md) |
 | `events` | Read the public event stream from `--after <seq>`, or `--follow` it | [Plugins](extensibility.md) |
@@ -167,8 +167,8 @@ That is 44 leaf commands, against 68 today. Each role uses far fewer:
 | Role | Commands it normally uses |
 |---|---|
 | Worker | `report` |
-| Sub-driver | `task create`, `task show`, `task list`, `task send`, `task deliver`, `report`, `artifact read` |
-| Main driver | `task create`, `task send`, `task show`, `task list`, `task deliver`, `grant`, `inbox`, `inbox ack`, `artifact read` |
+| Sub-driver | `task create`, `task show`, `task list`, `task send`, `task accept`, `report`, `artifact read` |
+| Main driver | `task create`, `task send`, `task show`, `task list`, `task accept`, `grant`, `inbox`, `inbox ack`, `artifact read` |
 
 ## What this replaces
 
@@ -182,7 +182,7 @@ That is 44 leaf commands, against 68 today. Each role uses far fewer:
 | `worker` family | `task start`, `resume`, `retry`, `stop`, `send` and `log` |
 | `wake` family, claim tokens and parking | `inbox`, push delivery and the daemon |
 | `task obligations` | `inbox` and `task list` |
-| `task attest-delivery`, `task attest-report-recovery`, `task verify-delivery`, `workspace release` | `task deliver`, `task verify`, and release when a task closes |
+| `task attest-delivery`, `task attest-report-recovery`, `task verify-delivery`, `workspace release` | `task accept` (`task deliver` alias), `task verify`, and release when a task closes |
 | `repo scan`, `repo context` | Removed; discovery can be a plugin, and briefs point to repository context |
 | `legacy`, `--legacy-coordinator-json`, `protocol validate` | Removed |
 

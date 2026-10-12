@@ -8,7 +8,7 @@ Session execution turns coordination's decisions into running sessions. It prepa
 
 **Owns:** host operations, workspaces, briefs, launching and supervising sessions, liveness, stopping, session logs and reconciliation of interrupted effects.
 
-**Does not own:** task state and run identity ([coordination](coordination.md)), how sessions report and when continuation turns start ([notification and result flow](notifications.md)), what counts as delivered and when a workspace may be removed ([artifacts and authority](artifacts.md)), or transport conventions ([command surface](commands.md)).
+**Does not own:** task state and run identity ([coordination](coordination.md)), how sessions report and when continuation turns start ([notification and result flow](notifications.md)), what counts as accepted and when a workspace may be removed ([artifacts and authority](artifacts.md)), or transport conventions ([command surface](commands.md)).
 
 ## Hosts
 

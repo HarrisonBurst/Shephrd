@@ -4,9 +4,9 @@
 
 ## Purpose
 
-Artifacts and authority decides what a task delivers, captures it, proves when it has been delivered, and gates irreversible actions on authority the user granted. Finishing work never implies permission to land, discard or release it.
+Artifacts and authority decides what a task produces, captures it, proves when it has been accepted, and gates irreversible actions on authority the user granted. Finishing work never implies permission to land, discard or release it.
 
-**Owns:** deliverable types, sealing and storing artifacts, passing artifacts to dependent tasks, delivery and its proof, landing code, discard, when workspaces are released, and grants.
+**Owns:** deliverable types, sealing and storing artifacts, passing artifacts to dependent tasks, acceptance and its proof, landing code, discard, when workspaces are released, and grants.
 
 **Does not own:** task state ([coordination](coordination.md)), creating and removing workspaces ([session execution](execution.md)), or how results reach owners ([notification and result flow](notifications.md)).
 
@@ -14,7 +14,7 @@ Artifacts and authority decides what a task delivers, captures it, proves when i
 
 A task's deliverable is fixed when it is created.
 
-| Deliverable | The result carries | Delivered when |
+| Deliverable | The result carries | Accepted when |
 |---|---|---|
 | `code` | The attempt branch, sealed at a commit | The sealed commit is proven on the repository's default branch |
 | `report` | One or more files from the workspace, sealed as snapshots | The owner accepts it |
@@ -48,26 +48,26 @@ Pinned inputs never change. If a dependency changes afterwards, the dependent ta
 
 `artifact show <id>` prints an artifact's metadata, and `artifact read <id>` streams its bytes. Both work over SSH like any command.
 
-## Delivery
+## Acceptance
 
-`task deliver <task>` is the one verb for delivering a done task:
+`task accept <task>` is the canonical verb for accepting a done task; `task deliver <task>` remains a CLI compatibility alias with identical gates and effects:
 
-- **Report or answer:** the owner accepts the current result. The task closes as `delivered`. No grant is needed, because nothing irreversible happens: the snapshot already exists.
-- **Code:** Shephrd lands the sealed commit using the repository's landing mode, then proves it. This needs the `land` grant in every mode, because every mode publishes code. A standing `land` grant is prior user authorization; a delegated grant records approval in its reason. Core checks the grant, not a separate approval field.
+- **Report or answer:** the direct owner reviews and accepts the current result. The task closes as `accepted`. No grant is needed, because nothing irreversible happens: the snapshot already exists.
+- **Code:** `task accept` lands the sealed commit using the repository's landing mode and proves it. This needs the `land` grant in every mode, because every mode publishes code. A standing `land` grant is prior user authorization; a delegated grant records approval in its reason. Core checks the grant, not a separate approval field. Code already merged outside Shephrd can instead close as `accepted` through `task verify` after core proves it is on the default branch; verification does not publish code or require a `land` grant. In pull-request mode, publishing alone does not accept the task.
 
-A driver task can be delivered only once all its children are closed.
+A sub-driver reviews and accepts its own report/answer children and verified merged code children; the main driver accepts only the sub-driver parent. Neither reporting a parent result nor accepting it accepts, lands or discards a child. A driver task can close only after every direct child is closed, including done unmerged code. Active, waiting or questioned children must be resolved by their owner or escalated upstream, never closed automatically. Obsolete unmerged code stays open until proven merged or individually approved for discard; there is no superseded auto-close.
 
 ### Milestones
 
 Every deliverable passes two milestones. [Dependencies](coordination.md#dependencies) wait for one of them.
 
-| Deliverable | Published | Merged, which is delivered |
+| Deliverable | Published | Merged, with accepted closure on proof |
 |---|---|---|
 | Report or answer | The owner accepted it | Same moment |
 | Code, `direct` mode | Merged into the default branch | Same moment |
 | Code, `pull_request` mode | Branch pushed and pull request open | The pull request merged into the default branch |
 
-The task closes as `delivered` at the merged milestone. Between the two, a code task stays `done` and shows that it is awaiting merge, with its pull request.
+The task closes as `accepted` at the merged milestone. Between the two, a code task stays `done` and shows that it is awaiting merge, with its pull request. Historical `delivered` task closure reasons remain valid and readable; no stored rows or events are rewritten. The milestone `merged` remains distinct from task acceptance and webhook transport `delivered`.
 
 ### Landing modes
 
@@ -89,15 +89,15 @@ forge = "github"
 merge = "external"
 ```
 
-| Mode | `task deliver` does | Merged when |
+| Mode | `task accept` does | Merged when |
 |---|---|---|
 | `direct` | Merges the sealed commit into the default branch in a temporary worktree, fast-forward-only or with a merge commit, and pushes it. Without a remote, it updates the local default branch. | Immediately |
-| `pull_request`, `merge = "shephrd"` | Pushes the branch from the repository's host and opens a pull request through the forge provider, then merges it once the forge reports it mergeable, for example after checks pass. While checks are pending the task stays published; running `task deliver` again merges it. | Shephrd merges it |
+| `pull_request`, `merge = "shephrd"` | Pushes the branch from the repository's host and opens a pull request through the forge provider, then merges it once the forge reports it mergeable, for example after checks pass. While checks are pending the task stays published; running `task accept` again merges it. | Shephrd merges it |
 | `pull_request`, `merge = "external"` | Pushes the branch and opens a pull request | Someone merges it on the forge |
 
 - Landing never touches the registered checkout.
 - A conflict, rejected push or failed merge leaves the task `done`. The owner can send the worker a message to fix it, which reopens the task.
-- Review changes work the same way: a message reopens the task, the worker commits, its new result seals a new commit, and `task deliver` pushes it to the same pull request.
+- Review changes work the same way: a message reopens the task, the worker commits, its new result seals a new commit, and `task accept` pushes it to the same pull request.
 - Shephrd learns that a pull request merged from the forge plugin, typically through a forge webhook that runs `task verify`, so nothing polls. The owner can run `task verify` at any time too.
 
 ### Stacking
@@ -120,7 +120,7 @@ The owner decides what to do, typically telling the worker to rebase. Shephrd ne
 
 ### Proof
 
-Code is delivered only when core proves it is on the default branch:
+Code is accepted only when core proves it is on the default branch:
 
 - **Ancestry:** the sealed commit is reachable from the default branch, on the remote when there is one. Core checks this itself.
 - **Recorded merge:** a pull request merged on a forge that records it, such as GitHub or GitLab, read through that forge's plugin. Core checks that the pull request's head is the sealed commit and its merge commit is on the default branch, and records the proof as coming from that forge. This is how squash and rebase merges are proven, since they break ancestry.
@@ -170,8 +170,8 @@ shephrd grant revoke g_7
 |---|---|
 | Code result with uncommitted changes, no commits or the wrong branch | Result refused; the session fixes it and reports again. |
 | Report file missing, outside the workspace or over the size limit | Result refused with the reason. |
-| `task deliver` on code without a `land` grant | Refused with `not_granted`, naming the action. |
-| `task deliver` on code in a repository without a landing mode | Refused with `landing_not_configured`. |
+| `task accept` on code without a `land` grant | Refused with `not_granted`, naming the action. |
+| `task accept` on code in a repository without a landing mode | Refused with `landing_not_configured`. |
 | Landing conflict or rejected push | Landing fails; the task stays `done`. |
 | Landing provider fails or times out | Nothing is recorded as landed; the task stays `done`. |
 | Proof cannot be established | The task stays `done`; `task verify` can be run again. |
@@ -189,7 +189,7 @@ Follows [plugins and extensibility](extensibility.md).
 | `land.attempted` | Task, sealed commit, landing mode, outcome: `published`, `merged` or `failed` |
 | `task.published` | Task, artifact, branch and pull request when there is one |
 | `dependency.changed` | Dependent task, dependency, what changed: new commit, discarded, or merged with rewritten history |
-| `task.delivered` | Task, artifact, proof kind and its source |
+| `task.delivered` | Task, artifact, proof kind and its source. Retained as the stable event name for acceptance, including new `accepted` closures; old events and IDs remain unchanged. |
 | `grant.added`, `grant.revoked` | Grant, grantor, grantee, actions, scope, reason |
 | `grant.used` | Grant, action, task |
 | `pull_request.retargeted` | Stacked task, pull request, new target branch |
@@ -199,7 +199,7 @@ Follows [plugins and extensibility](extensibility.md).
 
 | Point | Gates |
 |---|---|
-| `task.deliver` | Delivering any task, including landing code. A typical gate requires passing CI before landing. |
+| `task.deliver` | Accepting any task, including landing code. Retained as the stable gate name for existing plugins, for both CLI verbs. A typical gate requires passing CI before landing. |
 | `task.discard` | Discarding a task or attempt |
 | `grant.add` | Delegating a grant at runtime |
 
@@ -213,12 +213,12 @@ The `report.result` gate in [notification and result flow](notifications.md#inte
 
 ### Limits
 
-Plugins never mark a task delivered, create or widen grants except through `grant` under their own identity, or change sealed artifacts. Core establishes every proof itself, and a provider's answer is evidence for it.
+Plugins never mark a task accepted, create or widen grants except through `grant` under their own identity, or change sealed artifacts. Core establishes every proof itself, and a provider's answer is evidence for it.
 
 ## Settled decisions
 
 1. **Three deliverables:** `code`, `report` and `answer`.
-2. **One `task deliver` verb.** It accepts reports and answers without a grant, and lands code with the `land` grant in every landing mode.
+2. **Canonical `task accept` verb, with `task deliver` compatibility.** It accepts reports and answers without a grant, and lands code with the `land` grant in every landing mode. Existing artifact IDs, proofs, events and gate names remain stable across upgrades and rollbacks; new closures use `accepted`, old `delivered` closures remain readable without migration.
 3. **Shephrd lands code itself**, using each repository's landing mode: `direct`, or `pull_request` merged by Shephrd or externally. There is no default mode. `task verify` proves merges done outside Shephrd.
 4. **Authority:** standing grants are declared in configuration, runtime grants delegate down the tree, and by default only the main driver can land and discard.
 5. **Reports are sealed when the result is reported**, and passed on as files beside the dependent's workspace rather than inside its brief.

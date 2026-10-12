@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,13 +33,13 @@ func TestCodeIsSealedLandedAndReleased(t *testing.T) {
 	if art["kind"] != "code" || art["branch"] != "shephrd/t_1/1" || art["commit"] == "" {
 		t.Fatalf("sealed artifact: %v", art)
 	}
-	r := env.Run("", "task", "deliver", "t_1")
+	r := env.Run("", "task", "accept", "t_1")
 	if r.Code != 0 {
-		t.Fatalf("deliver: %+v", r)
+		t.Fatalf("accept: %+v", r)
 	}
 	out := r.JSON(t)
-	if task := out["task"].(map[string]any); task["state"] != "closed" || task["reason"] != "delivered" || task["milestone"] != "merged" {
-		t.Fatalf("delivered task: %v", out)
+	if task := out["task"].(map[string]any); task["state"] != "closed" || task["reason"] != "accepted" || task["milestone"] != "merged" {
+		t.Fatalf("accepted task: %v", out)
 	}
 	if !strings.Contains(r.Stdout, "checkout_behind") {
 		t.Fatalf("no warning about the registered checkout: %s", r.Stdout)
@@ -56,6 +57,36 @@ func TestCodeIsSealedLandedAndReleased(t *testing.T) {
 			t.Fatalf("missing %s in %s", want, names)
 		}
 	}
+}
+
+func TestAcceptReportAndLegacyClosure(t *testing.T) {
+	env, _ := withHarness(t)
+	env.OK("task", "create", "--repo", "api", "--objective", "Research", "--deliverable", "report")
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_1", "done")
+	art := env.OK("task", "show", "t_1")["artifact"].(map[string]any)["id"]
+	accepted := env.OK("task", "accept", "t_1")
+	if task := accepted["task"].(map[string]any); task["reason"] != "accepted" || task["milestone"] != "merged" {
+		t.Fatalf("report acceptance: %v", task)
+	}
+	env.Refused("invalid_state", "task", "accept", "t_1")
+	env.Refused("invalid_state", "task", "deliver", "t_1")
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(env.Home, ".local", "state", "shephrd", "shephrd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE tasks SET reason = 'delivered' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	shown := env.OK("task", "show", "t_1")
+	if task := shown["task"].(map[string]any); task["reason"] != "delivered" || task["milestone"] != "merged" || shown["artifact"].(map[string]any)["id"] != art {
+		t.Fatalf("historical closure: %v", shown)
+	}
+	if !strings.Contains(strings.Join(eventNames(env, "t_1"), " "), "task.delivered") {
+		t.Fatal("historical acceptance event was lost")
+	}
+	env.Refused("invalid_state", "task", "accept", "t_1")
 }
 
 func TestDirtyCodeResultIsRefusedUntilCommitted(t *testing.T) {
@@ -197,11 +228,94 @@ func TestSubDriverLandsWithADelegatedGrant(t *testing.T) {
 	if errs := commandErrors(env, "t_1"); len(errs) != 0 {
 		t.Fatalf("sub-driver commands failed: %v", errs)
 	}
-	if task := env.Task("t_2"); task["reason"] != "delivered" {
+	if task := env.Task("t_2"); task["reason"] != "accepted" {
 		t.Fatalf("worker: %v", task)
 	}
 	if revoked := env.OK("grant", "revoke", "g_1"); revoked["revoked"] == "" {
 		t.Fatalf("revoke: %v", revoked)
+	}
+}
+
+func TestSubDriverAcceptsChildrenBeforeParent(t *testing.T) {
+	env, repo := withHarness(t)
+	env.AppendConfig("[timeouts]\nsettle = \"300ms\"")
+	env.Script(map[string][][]action{"t_1": {
+		{
+			{"shephrd": []string{"task", "create", "--repo", "api", "--objective", "Research", "--deliverable", "report"}},
+			{"shephrd": []string{"task", "create", "--repo", "api", "--objective", "Implement"}},
+			{"shephrd": []string{"task", "start", "t_2"}},
+			{"shephrd": []string{"task", "start", "t_3"}},
+			{"report": []string{"result", "Children produced results"}},
+		},
+		{{"report": []string{"note", "Children remain open pending review"}}},
+		{
+			{"shephrd": []string{"task", "accept", "t_2"}},
+			{"shephrd": []string{"task", "accept", "t_2"}},
+			{"shephrd": []string{"task", "verify", "t_3"}},
+			{"report": []string{"result", "Reviewed the report and proved code on main"}},
+		},
+		{{"report": []string{"note", "All children closed"}}},
+	}})
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_2", "done")
+	env.WaitState("t_3", "done")
+	env.StartDaemon()
+	env.WaitState("t_1", "done")
+	env.Refused("open_children", "task", "accept", "t_1")
+	env.Refused("not_owner", "task", "accept", "t_2")
+	env.Refused("not_owner", "task", "accept", "t_3")
+	if task := env.Task("t_3"); task["milestone"] != nil || task["state"] != "done" {
+		t.Fatalf("unmerged child was implicitly accepted: %v", task)
+	}
+	art := env.OK("task", "show", "t_3")["artifact"].(map[string]any)
+	testkit.Git(t, repo, "merge", "-q", "--no-ff", "-m", "External merge", "shephrd/t_3/1")
+	env.OK("task", "send", "t_1", "Review and close your children")
+	env.Eventually("sub-driver to accept both children", func() bool {
+		return env.Task("t_2")["state"] == "closed" && env.Task("t_3")["state"] == "closed"
+	})
+	env.WaitState("t_1", "done")
+	if errs := commandErrors(env, "t_1"); len(errs) != 1 || !strings.Contains(errs[0], `"kind":"invalid_state"`) {
+		t.Fatalf("unexpected repeat acceptance response: %v", errs)
+	}
+	for _, ref := range []string{"t_2", "t_3"} {
+		if task := env.Task(ref); task["reason"] != "accepted" {
+			t.Fatalf("child %s: %v", ref, task)
+		}
+	}
+	if shown := env.OK("task", "show", "t_3"); shown["artifact"].(map[string]any)["id"] != art["id"] {
+		t.Fatalf("proof changed the sealed artifact: %v", shown)
+	}
+	out := env.OK("task", "accept", "t_1")
+	if task := out["task"].(map[string]any); task["reason"] != "accepted" || task["state"] != "closed" {
+		t.Fatalf("parent acceptance: %v", task)
+	}
+	env.Refused("invalid_state", "task", "accept", "t_1")
+}
+
+func TestWaitingChildDoesNotCloseWithParent(t *testing.T) {
+	env, _ := withHarness(t)
+	env.AppendConfig("[timeouts]\nsettle = \"300ms\"")
+	env.Script(map[string][][]action{
+		"t_1": {
+			{
+				{"shephrd": []string{"task", "create", "--repo", "api", "--objective", "Investigate", "--deliverable", "report"}},
+				{"shephrd": []string{"task", "start", "t_2"}},
+				{"report": []string{"result", "Investigation needs an answer"}},
+				{"report": []string{"note", "Waiting for the child's question to be resolved"}},
+			},
+			{{"report": []string{"note", "Child still needs an answer"}}},
+		},
+		"t_2": {{{"report": []string{"question", "Which behavior?"}}}},
+	})
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_2", "waiting")
+	env.StartDaemon()
+	env.WaitState("t_1", "done")
+	env.Refused("open_children", "task", "accept", "t_1")
+	if task := env.Task("t_2"); task["state"] != "waiting" {
+		t.Fatalf("waiting child was closed: %v", task)
 	}
 }
 
@@ -260,7 +374,7 @@ func TestVerifyProvesAMergeDoneOutsideShephrd(t *testing.T) {
 	env.Refused("not_proven", "task", "verify", "t_1")
 	testkit.Git(t, repo, "merge", "-q", "--no-ff", "-m", "Merge by hand", "shephrd/t_1/1")
 	out := env.OK("task", "verify", "t_1")
-	if out["task"].(map[string]any)["reason"] != "delivered" {
+	if out["task"].(map[string]any)["reason"] != "accepted" {
 		t.Fatalf("verify: %v", out)
 	}
 }

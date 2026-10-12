@@ -37,17 +37,15 @@ func (s *Service) repo(t *coord.Task) (path, branch string, host execution.Host,
 	return path, branch, host, err
 }
 
-// Deliver accepts a done task's current result, or lands its code using
-// the repository's landing mode, then closes it as delivered.
-func (s *Service) Deliver(ctx context.Context, c coord.Caller, t *coord.Task) (*Delivered, error) {
+func (s *Service) Accept(ctx context.Context, c coord.Caller, t *coord.Task) (*Delivered, error) {
 	if t.State != "done" || t.ArtifactID == 0 {
-		return nil, fault.New("invalid_state", "%s is %s; only a done task with a result can be delivered", t.Ref, t.State).WithNext("task", "show", t.Ref)
+		return nil, fault.New("invalid_state", "%s is %s; only a done task with a result can be accepted", t.Ref, t.State).WithNext("task", "show", t.Ref)
 	}
 	if n, err := coord.OpenChildren(s.DB, t.ID); err != nil || n > 0 {
 		if err != nil {
 			return nil, err
 		}
-		return nil, fault.New("open_children", "%s has %d open children; deliver or close them first", t.Ref, n).WithNext("task", "list", "--parent", t.Ref)
+		return nil, fault.New("open_children", "%s has %d open children; accept or close them first", t.Ref, n).WithNext("task", "list", "--parent", t.Ref)
 	}
 	art, err := Load(s.DB, t.ArtifactID)
 	if err != nil {
@@ -125,8 +123,6 @@ func recordLanding(tx *store.Tx, c coord.Caller, t *coord.Task, art *Artifact, m
 	return err
 }
 
-// close records delivery with its proof and makes the work's dependents
-// ready. A delivered dependency is both published and merged.
 func (s *Service) close(tx *store.Tx, c coord.Caller, t *coord.Task, art *Artifact, proof, source string, wake bool) error {
 	if _, err := tx.Emit("task.published", c.String(), t.ID, 0, 0, map[string]any{"task": t.Ref, "artifact": art.Ref, "branch": art.Branch}); err != nil {
 		return err
@@ -137,7 +133,7 @@ func (s *Service) close(tx *store.Tx, c coord.Caller, t *coord.Task, art *Artifa
 	if _, err := tx.Emit("task.delivered", c.String(), t.ID, 0, 0, map[string]any{"task": t.Ref, "artifact": art.Ref, "proof": proof, "source": source}); err != nil {
 		return err
 	}
-	return coord.Close(tx, c.String(), t, "delivered")
+	return coord.Close(tx, c.String(), t, "accepted")
 }
 
 func (s *Service) finish(ctx context.Context, c coord.Caller, id int64, out *Delivered) (*Delivered, error) {

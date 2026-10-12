@@ -110,7 +110,7 @@ func TestStackedPullRequestsAndASquashMergeProvenByTheForge(t *testing.T) {
 	f.Refused("not_proven", "task", "verify", "t_1")
 	f.gh(t, "pr", "merge", "1", "--repo", f.origin, "--squash")
 	verified := f.OK("task", "verify", "t_1")
-	if verified["task"].(map[string]any)["reason"] != "delivered" {
+	if verified["task"].(map[string]any)["reason"] != "accepted" {
 		t.Fatalf("verify: %v", verified)
 	}
 	landings := f.OK("task", "show", "t_1")["landings"].([]any)
@@ -133,13 +133,13 @@ func TestShephrdMergesOnceThePullRequestIsMergeable(t *testing.T) {
 	f.OK("task", "create", "--repo", "api", "--objective", "Fix it")
 	f.OK("task", "start", "t_1")
 	f.WaitState("t_1", "done")
-	pending := f.OK("task", "deliver", "t_1", "--key", "first")
+	pending := f.OK("task", "accept", "t_1", "--key", "first")
 	if pending["pending"] == nil || pending["task"].(map[string]any)["state"] != "done" {
 		t.Fatalf("delivery while checks are pending: %v", pending)
 	}
 	os.Remove(filepath.Join(f.Home, ".fakegh", "blocked"))
 	merged := f.OK("task", "deliver", "t_1", "--key", "second")
-	if merged["task"].(map[string]any)["reason"] != "delivered" || merged["pull_request"].(map[string]any)["ref"] != "1" {
+	if merged["task"].(map[string]any)["reason"] != "accepted" || merged["pull_request"].(map[string]any)["ref"] != "1" {
 		t.Fatalf("delivery once mergeable: %v", merged)
 	}
 	if len(f.pullRequests(t)) != 1 {

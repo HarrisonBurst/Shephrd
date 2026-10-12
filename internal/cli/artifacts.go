@@ -52,8 +52,8 @@ func (a *app) seal(caller Caller, t *coord.Task, body string, files []string) (*
 }
 
 func deliveryCommands(a *app) []*cobra.Command {
-	deliver := &cobra.Command{Use: "deliver <task>", Short: "Accept a done task's result, or land its code", Args: cobra.ExactArgs(1)}
-	deliver.RunE = a.run(func(_ *cobra.Command, args []string) (any, error) {
+	accept := &cobra.Command{Use: "accept <task>", Aliases: []string{"deliver"}, Short: "Accept a done task's result, or land its code", Args: cobra.ExactArgs(1)}
+	accept.RunE = a.run(func(_ *cobra.Command, args []string) (any, error) {
 		caller, db, t, err := a.readTask(args[0])
 		if err != nil {
 			return nil, err
@@ -69,7 +69,7 @@ func deliveryCommands(a *app) []*cobra.Command {
 			if err != nil {
 				return nil, err
 			}
-			out, err := s.Deliver(a.ctx, caller, t)
+			out, err := s.Accept(a.ctx, caller, t)
 			if err != nil {
 				return nil, err
 			}
@@ -115,7 +115,7 @@ func deliveryCommands(a *app) []*cobra.Command {
 			return s.Discard(a.ctx, caller, t, attempt)
 		})
 	})
-	return []*cobra.Command{deliver, verify, discard}
+	return []*cobra.Command{accept, verify, discard}
 }
 
 func grantCommand(a *app) *cobra.Command {

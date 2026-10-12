@@ -74,7 +74,7 @@ A sub-driver is a `driver` task. There are no separate sub-driver records or com
 A task may wait on sibling tasks under the same owner. Each dependency waits for one of two [milestones](artifacts.md#milestones):
 
 - **Published**, the default: the dependency's work is finished and available. A report or answer has been accepted, code in a `direct` repository is merged, and code in a `pull_request` repository has an open pull request.
-- **Merged**, with `--until merged`: the dependency is delivered. For code, it is on the default branch.
+- **Merged**, with `--until merged`: the dependency is accepted. For code, it is on the default branch.
 
 The graph is acyclic. A queued task is **ready** when every dependency has reached its milestone, and a dependency that closed any other way is reported as never satisfiable.
 
@@ -127,7 +127,7 @@ stateDiagram-v2
     done --> running: retry, new attempt
     queued --> closed: cancel
     held --> closed: discard or cancel
-    done --> closed: delivered or discarded
+    done --> closed: accepted or discarded
 ```
 
 - `queued`: created, not started. Readiness is evidence; starting is always an explicit command.
@@ -135,7 +135,7 @@ stateDiagram-v2
 - `waiting`: the run asked a question that its owner has not answered.
 - `held`: stopped, failed, blocked or lost. The reason says which, and the attempt keeps its workspace.
 - `done`: a valid result has been recorded. For a worker task, its result moves the task to `done`. For a driver task, each result answers its named request; the task becomes `done` only after every request it has received is answered and the reported turn settles. This is not owner acceptance, landing or release. A message to a done task reopens it, and the earlier result stays in the log but no longer counts as current until the next valid result.
-- `closed`: nothing further will happen, with reason `delivered`, `discarded` or `cancelled`. Closing as delivered or discarded is decided by artifacts and authority.
+- `closed`: nothing further will happen, with reason `accepted`, `discarded` or `cancelled`. Historical `delivered` reasons are also valid and remain readable without rewriting stored state or event history. Closing as accepted or discarded is decided by artifacts and authority.
 
 When a run's host is unreachable, the task keeps its state and its liveness is `unknown`. Any transition that needs the run to be gone, such as resume or retry, is refused until liveness is known.
 
@@ -144,7 +144,7 @@ When a run's host is unreachable, the task keeps its state and its liveness is `
 - Exactly one owner per task, fixed by the tree. Only roots are adopted.
 - Only start and retry create attempts. A new run starts only when no current run is live or unknown.
 - Events from a non-current run never change state.
-- A task cannot close while any child is open, so no work is ever orphaned. Results do not wait on children.
+- A task cannot close while any direct child is open, including done code awaiting merge, so no work is ever orphaned. Results do not wait on children. Closing never automatically accepts, lands or discards children.
 - Stop may apply to a whole subtree. Closing never cascades.
 - Readiness, results and notes never start, close or authorize anything.
 - Nothing deletes history. Retry supersedes; it never releases.
