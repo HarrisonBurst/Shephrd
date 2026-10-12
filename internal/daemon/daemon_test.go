@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
@@ -14,8 +15,9 @@ import (
 )
 
 type reportedDriverHost struct {
-	calls  []string
-	onStop func() error
+	calls        []string
+	onStop       func() error
+	noExitRecord bool
 }
 
 func (*reportedDriverHost) Name() string { return "workhorse" }
@@ -26,7 +28,9 @@ func (h *reportedDriverHost) Call(_ context.Context, op string, _, resp any) err
 	case "probe":
 		resp.(*execution.StateResponse).State = "live"
 	case "exit_record":
-		*resp.(*execution.ExitResponse) = execution.ExitResponse{Found: true, Record: execution.ExitRecord{Status: 0, Session: "session"}}
+		if !h.noExitRecord {
+			*resp.(*execution.ExitResponse) = execution.ExitResponse{Found: true, Record: execution.ExitRecord{Status: 0, Session: "session"}}
+		}
 	case "stop":
 		if h.onStop != nil {
 			if err := h.onStop(); err != nil {
@@ -104,6 +108,14 @@ func TestObserveUsesExitRecordForReportedDriver(t *testing.T) {
 }
 
 func TestObserveReconcilesNoteReportedWhileStoppingResumedDriver(t *testing.T) {
+	for _, reason := range []string{"no_report", "inactive"} {
+		t.Run(reason, func(t *testing.T) {
+			testObserveReconcilesNoteReportedWhileStoppingResumedDriver(t, reason)
+		})
+	}
+}
+
+func testObserveReconcilesNoteReportedWhileStoppingResumedDriver(t *testing.T, reason string) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "shephrd.db"))
 	if err != nil {
@@ -175,12 +187,25 @@ func TestObserveReconcilesNoteReportedWhileStoppingResumedDriver(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return coord.MarkLive(tx, resumed, 123, "start", "", "codex", "")
+		if err := coord.MarkLive(tx, resumed, 123, "start", "", "codex", ""); err != nil {
+			return err
+		}
+		if reason == "inactive" {
+			_, err = tx.Exec(`UPDATE runs SET last_activity = ? WHERE id = ?`, store.Timestamp(time.Now().Add(-2*time.Hour)), resumed.ID)
+		}
+		return err
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := &reportedDriverHost{onStop: func() error {
+	host := &reportedDriverHost{noExitRecord: reason == "inactive", onStop: func() error {
+		var chosen string
+		if err := db.QueryRow(`SELECT stop_reason FROM runs WHERE id = ?`, resumed.ID).Scan(&chosen); err != nil {
+			return err
+		}
+		if chosen != reason {
+			return fmt.Errorf("interruption reason: %s, want %s", chosen, reason)
+		}
 		done := make(chan error, 1)
 		go func() {
 			done <- db.Write(ctx, func(tx *store.Tx) error {
