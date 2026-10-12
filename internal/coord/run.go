@@ -361,6 +361,11 @@ func SetLivenessAndWake(tx *store.Tx, r *Run, liveness string) error {
 
 // RecordExit marks a run exited and applies what its exit means.
 func RecordExit(tx *store.Tx, r *Run, status int, session string) error {
+	persisted, err := LoadRun(tx, r.ID)
+	if err != nil {
+		return err
+	}
+	*r = *persisted
 	if r.Liveness == "exited" {
 		return nil
 	}

@@ -191,6 +191,61 @@ func TestClosingNeverOrphansChildren(t *testing.T) {
 	}
 }
 
+func TestRecordExitUsesCommittedReportAfterRunWasLoaded(t *testing.T) {
+	f := newFixture(t)
+	task := f.must(f.create(main, NewTask{Role: "driver", Repo: "api", Objective: "Work"}))
+	var run *Run
+	if err := f.write(func(tx *store.Tx) error {
+		attempt, err := AllocateAttempt(tx, task, task.Target, func(int64) (string, string) { return "/w", "b" }, 0)
+		if err != nil {
+			return err
+		}
+		if err := AdoptAttempt(tx, "system", task, attempt); err != nil {
+			return err
+		}
+		first, _, err := BeginRun(tx, "system", task, "start", func(int64) string { return "/r1" })
+		if err != nil {
+			return err
+		}
+		if err := RecordExit(tx, first, 0, "native-session"); err != nil {
+			return err
+		}
+		run, _, err = BeginRun(tx, "system", task, "nudge", func(int64) string { return "/r2" })
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.write(func(tx *store.Tx) error {
+		current, err := Load(tx, task.ID)
+		if err != nil {
+			return err
+		}
+		caller := Caller{Kind: "run", Task: task.ID, Attempt: 1, Run: run.ID}
+		_, err = RecordReport(tx, caller, current, &Report{Kind: "note", Body: "Checkpoint"})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if run.TurnReported {
+		t.Fatal("the exit observer unexpectedly saw the committed report")
+	}
+	if err := f.write(func(tx *store.Tx) error { return RecordExit(tx, run, -1, "native-session") }); err != nil {
+		t.Fatal(err)
+	}
+	current, err := Load(f.db, task.ID)
+	if err != nil || current.State != "running" || current.Reason != "" {
+		t.Fatalf("task after exit: %+v, %v", current, err)
+	}
+	var reported bool
+	if err := f.db.QueryRow(`SELECT json_extract(data, '$.reported') FROM events WHERE run = ? AND name = 'run.exited'`, run.ID).Scan(&reported); err != nil || !reported {
+		t.Fatalf("exit event: %v, %v", reported, err)
+	}
+	attempt, err := LoadAttempt(f.db, task.ID, 1)
+	if err != nil || attempt.Session != "native-session" {
+		t.Fatalf("native session: %+v, %v", attempt, err)
+	}
+}
+
 func TestUnknownLivenessRefusesEveryReplacement(t *testing.T) {
 	f := newFixture(t)
 	task := f.must(f.create(main, NewTask{Repo: "api", Objective: "Work"}))
