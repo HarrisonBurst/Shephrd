@@ -75,7 +75,7 @@ extend = "/path/to/house-rules.md"
 
 ### Receive results
 
-Results, questions and held tasks reach the main driver's inbox. Read each report and any referenced artifacts, share the findings with the user, then acknowledge the item. Check `shephrd task show` before calling work complete: a reused sub-driver is done only after all requests are answered. Accept report or answer tasks with `shephrd task accept <task>` without a grant; `task deliver` remains a compatibility alias. A sub-driver accepts its own children, and the main driver accepts only the parent once every child is closed, including done code awaiting merge. Accepting code can land it and needs `land`, and a standing `land` grant is prior authorization. Discarding needs `discard` plus explicit per-action user approval, even with a standing grant. Code in pull-request mode stays done until the pull request merges. To have inbox items pushed, configure a delivery for the driver:
+Results, questions and held tasks reach the main driver's durable inbox without delivery configuration. The owner uses `shephrd inbox` or `shephrd inbox wait --after <last-received-item-id>` (start at `0`), reads each real item and any referenced artifacts, shares the findings with the user, then explicitly runs the item's `next.ack` command after handling it. A delivery receipt or a completed turn does not acknowledge an item. A restarted watch rescans pending unacknowledged IDs, including IDs at or below its cursor; deduplicate repeated IDs. Idle watches print nothing. Check `shephrd task show` before calling work complete: a reused sub-driver is done only after all requests are answered. Accept report or answer tasks with `shephrd task accept <task>` without a grant; `task deliver` remains a compatibility alias. A sub-driver accepts its own children, and the main driver accepts only the parent once every child is closed, including done code awaiting merge. Accepting code can land it and needs `land`, and a standing `land` grant is prior authorization. Discarding needs `discard` plus explicit per-action user approval, even with a standing grant. Code in pull-request mode stays done until the pull request merges. In Claude Code, install the main-driver skill above and have that session arm its own long-running background `inbox wait` at session start: each actual stdout item is a turn-level notification, while idle and reconnect are silent. No second terminal, external sender, driver registry or incoming connection on the client host is needed. For optional webhook/plugin delivery, configure a provider:
 
 ```toml
 [drivers.main.delivery]
@@ -84,7 +84,7 @@ url = "https://example.internal/shephrd"
 secret_file = "/run/secrets/shephrd-webhook"   # mode 0600
 ```
 
-Deliveries are signed in the Standard Webhooks style. A main driver in Pi can instead use the [Pi inbox extension](#plugins), which holds `shephrd inbox wait` and turns each item into a follow-up turn.
+Webhook deliveries are signed in the Standard Webhooks style and remain compatible with plugins; they never ack. A main driver in Pi can use the [Pi inbox extension](#plugins), which holds `shephrd inbox wait` and sends real items into follow-up turns for explicit handling and acknowledgement. Codex can use the generic inbox/watch commands; first-party turn delivery for Codex is not included.
 
 ## Three machines
 
@@ -116,7 +116,7 @@ On **hermes**:
 shephrd init --home me@workhorse
 ```
 
-Every command on hermes is now forwarded to workhorse over SSH, with the same inputs and outputs. A dropped connection is retried with the same key; if every attempt fails the command exits 3, meaning the outcome is unknown and is safe to retry with the same `--key`.
+Every command on hermes, including `inbox wait`, is forwarded outbound to workhorse over SSH as the key's driver identity, with the same inputs and outputs. A dropped connection is retried with the same key for mutations; if every attempt fails the command exits 3, meaning the outcome is unknown and is safe to retry with the same `--key`. Restart a dropped inbox watch with the last received ID; pending items will be rescanned.
 
 On **laptop**:
 

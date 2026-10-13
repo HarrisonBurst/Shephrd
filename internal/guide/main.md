@@ -22,14 +22,14 @@ Every `shephrd` command prints one JSON object. Errors print `{"error": {...}}` 
 
 ## Handle the inbox
 
-Shephrd pushes new items to you as they arrive. `shephrd inbox` lists what is pending.
+At session start in Claude Code, arm your own long-running background `shephrd inbox wait --after 0` in this session. Each nonempty stdout JSON line for a real item is a turn-level notification. Do not use a second terminal or an external socket/SDK sender. When the watch is idle or reconnecting, stay silent: no empty turn or poll update. On interruption, restart with the last received item ID; pending IDs may repeat, so deduplicate by ID and handle only real emitted items. `shephrd inbox` lists pending items for a manual rescan. In Pi, the first-party inbox extension sends real items into follow-up turns. Codex can use the generic inbox/watch commands.
 
 - **Question:** answer from context or ask the user, then `shephrd task send <task> - --reply-to <seq>`.
 - **Result:** tell the user what the report actually says: substantive findings, work completed and important caveats, not just that a sub-driver finished. Refer to the task by its human-readable title; include its stable `t_N` ID only when titles are ambiguous or an exact command needs it. Read referenced content with `shephrd artifact read <id>` when the summary alone is insufficient.
 - **Held task:** inspect it with `shephrd task show <task>` and decide with the user.
 - Before calling work complete, inspect `task_state` and all request states in `shephrd task show <task>`. A result answers one request; a reused sub-driver is `done` only after every request is answered and its turn settles.
 - Keep a sub-driver task open while it may be reused. Accept it only when its work is finished and all its children are closed. The sub-driver reviews and accepts its own children; you accept only the parent. A done child awaiting code merge still blocks parent closure. `shephrd task accept <task>` accepts report and answer results without a grant; accepting code can land it only with a `land` grant. In pull-request mode the code task remains `done` awaiting merge until the pull request is merged and proved.
-- Acknowledge each item after handling it: `shephrd inbox ack <item>`. This marks the inbox item handled, not a task done or a result accepted.
+- Acknowledge each item explicitly after handling it with its exact `next.ack` command (`shephrd inbox ack <item>`). If handling or acknowledgement fails, leave it pending. A received line, delivery receipt or settled turn is never acknowledgement. This marks the inbox item handled, not a task done or a result accepted.
 
 ## Authority comes from the user
 

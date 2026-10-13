@@ -65,8 +65,16 @@ func inboxCommand(a *app) *cobra.Command {
 		}
 		a.streamed = true
 		encoder := json.NewEncoder(a.stream)
+		rescan := true
 		for {
-			items, err := coord.Items(db, `i.driver = ? AND i.state = 'pending' AND i.id > ?`, caller.String(), after)
+			where := `i.driver = ? AND i.state = 'pending' AND i.id > ?`
+			args := []any{caller.String(), after}
+			if rescan {
+				where = `i.driver = ? AND i.state = 'pending'`
+				args = []any{caller.String()}
+				rescan = false
+			}
+			items, err := coord.Items(db, where, args...)
 			if a.ctx.Err() != nil {
 				return nil, nil
 			}
@@ -77,7 +85,9 @@ func inboxCommand(a *app) *cobra.Command {
 				if err := encoder.Encode(item); err != nil {
 					return nil, nil
 				}
-				after = item.ID
+				if item.ID > after {
+					after = item.ID
+				}
 			}
 			select {
 			case <-a.ctx.Done():

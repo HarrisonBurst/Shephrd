@@ -3,8 +3,14 @@ package cli_test
 import (
 	"context"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"shephrd/internal/cli"
 	"shephrd/internal/fault"
@@ -80,6 +86,96 @@ func TestUnreachableHomeIsAnUnknownOutcome(t *testing.T) {
 	r := m.client.Run("", "task", "list")
 	if r.Code != 3 || !strings.Contains(r.Stderr, "transport_failed") {
 		t.Fatalf("unreachable home: %+v", r)
+	}
+}
+
+func remoteInboxStream(t *testing.T, env *testkit.Env, after string) (func() string, func()) {
+	t.Helper()
+	cmd := exec.Command(env.Bin, "inbox", "wait", "--after", after)
+	cmd.Env = []string{"HOME=" + env.Home, "PATH=" + strings.Join(env.Path, ":") + ":" + os.Getenv("PATH"), "USER=" + os.Getenv("USER")}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out := filepath.Join(t.TempDir(), "stream")
+	file, err := os.Create(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout, cmd.Stderr = file, file
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			cmd.Wait()
+			file.Close()
+		})
+	}
+	t.Cleanup(stop)
+	return func() string { body, _ := os.ReadFile(out); return string(body) }, stop
+}
+
+func TestRemoteInboxWaitReplaysPendingWithoutDeliveryConfig(t *testing.T) {
+	m := threeMachines(t)
+	m.home.OK("repo", "add", testkit.GitRepo(t, "api"))
+	m.home.Script(map[string][][]action{"t_1": {{{"report": []string{"blocker", "Need help"}}}}})
+	m.home.OK("task", "create", "--repo", "api", "--deliverable", "report", "--objective", "Ready")
+	m.home.OK("task", "start", "t_1")
+	m.home.WaitState("t_1", "held")
+	if items := m.client.OK("inbox")["items"].([]any); len(items) != 1 {
+		t.Fatalf("remote inbox: %v", items)
+	}
+	first, interrupt := remoteInboxStream(t, m.client, "0")
+	m.client.Eventually("first item over SSH", func() bool { return strings.Contains(first(), `"id":1`) })
+	interrupt()
+	m.client.SSHDown("me@workhorse", true)
+	if r := m.client.Run("", "inbox", "wait", "--after", "1"); r.Code != 3 {
+		t.Fatalf("interrupted remote stream: %+v", r)
+	}
+	m.client.SSHDown("me@workhorse", false)
+	read, _ := remoteInboxStream(t, m.client, "1")
+	m.client.Eventually("pending item replay after SSH reconnect", func() bool {
+		return strings.Contains(read(), `"id":1`)
+	})
+	if got := strings.Count(read(), `"id":1`); got != 1 {
+		t.Fatalf("duplicate ID on the same connection: %s", read())
+	}
+	m.client.OK("inbox", "ack", "1")
+	if items := m.client.OK("inbox")["items"].([]any); len(items) != 0 {
+		t.Fatalf("item remained after explicit ack: %v", items)
+	}
+	acked, _ := remoteInboxStream(t, m.client, "1")
+	if got := acked(); got != "" {
+		t.Fatalf("acknowledged item was replayed: %s", got)
+	}
+}
+
+func TestRemoteInboxWaitIdleNewItemAndDriverIsolation(t *testing.T) {
+	m := threeMachines(t)
+	m.home.OK("repo", "add", testkit.GitRepo(t, "api"))
+	read, _ := remoteInboxStream(t, m.client, "0")
+	time.Sleep(600 * time.Millisecond)
+	if got := read(); got != "" {
+		t.Fatalf("idle watch emitted output: %s", got)
+	}
+	other := testkit.NewEnv(t)
+	other.OK("init", "--home", "me@workhorse")
+	other.InstallSSH(map[string]testkit.SSHTarget{"me@workhorse": {Command: []string{m.home.Bin, "serve", "--as", "driver:other"}, Home: m.home.Home}})
+	otherRead, _ := remoteInboxStream(t, other, "0")
+	m.home.Script(map[string][][]action{"t_1": {{{"report": []string{"blocker", "Need help"}}}}})
+	m.home.OK("task", "create", "--repo", "api", "--objective", "Ready")
+	m.home.OK("task", "start", "t_1")
+	m.home.WaitState("t_1", "held")
+	m.client.Eventually("new remote item", func() bool { return strings.Contains(read(), `"id":1`) })
+	if got := strings.Count(read(), `"id":1`); got != 1 {
+		t.Fatalf("duplicate item on live watch: %s", read())
+	}
+	if got := otherRead(); got != "" {
+		t.Fatalf("wrong driver received item: %s", got)
+	}
+	other.Refused("not_found", "inbox", "ack", "1")
+	if items := m.client.OK("inbox")["items"].([]any); len(items) != 1 {
+		t.Fatalf("wrong driver's ack settled the item: %v", items)
 	}
 }
 
