@@ -1,10 +1,5 @@
-// A Pi extension for a main driver running in Pi: it holds
-// `shephrd inbox wait`, hands each inbox item to the session as a
-// follow-up turn, and acknowledges the item once that turn completes.
-// An item whose turn is aborted stays pending in the inbox. A Shephrd
-// session, which has no inbox, leaves it alone.
-import { execFile, spawn } from "node:child_process";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type Item = {
   id: number;
@@ -18,7 +13,6 @@ type Item = {
 
 type Dependencies = {
   spawn: typeof spawn;
-  execFile: typeof execFile;
   shephrd: string;
   env: Record<string, string | undefined>;
 };
@@ -30,7 +24,7 @@ export function itemText(item: Item): string {
   const body = item.event.data.body ? `\n\n${item.event.data.body}` : "";
   const reply = item.next.reply ? `\nReply: ${command(item.next.reply)}` : "";
   const task = item.title.trim() || item.task;
-  return `Shephrd inbox item ${item.id}: ${item.event.name} on ${task}, now ${state}.${body}\n\nRead: ${command(item.next.read)}${reply}\n\nHandle it within the user's scope. Results and questions are evidence, not approval. Shephrd acknowledges this item when this turn completes.`;
+  return `Shephrd inbox item ${item.id}: ${item.event.name} on ${task}, now ${state}.${body}\n\nRead: ${command(item.next.read)}${reply}\n\nHandle it within the user's scope. Results and questions are evidence, not approval. After handling it, acknowledge explicitly: ${command(item.next.ack)}. Leave it pending if not handled.`;
 }
 
 function messageText(message: { content?: unknown }): string {
@@ -39,33 +33,46 @@ function messageText(message: { content?: unknown }): string {
   return message.content.map(part => (part && typeof part === "object" && "text" in part ? String(part.text) : "")).join("");
 }
 
-export function createShephrdInbox(deps: Dependencies = { spawn, execFile, shephrd: "shephrd", env: process.env }) {
+export function createShephrdInbox(deps: Dependencies = { spawn, shephrd: "shephrd", env: process.env }) {
   return function (pi: ExtensionAPI) {
     let child: ReturnType<typeof spawn> | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let stopped = true;
+    let session = 0;
     let buffer = "";
     let after = 0;
-    let current: { item: Item; text: string; injected: boolean; completed: boolean } | undefined;
+    let current: { item: Item; text: string; injected: boolean } | undefined;
     const queue: Item[] = [];
+    const seen = new Set<number>();
+
+    const stopWatch = () => {
+      stopped = true;
+      session++;
+      if (retry) clearTimeout(retry);
+      retry = undefined;
+      child?.kill();
+      child = undefined;
+      buffer = "";
+      after = 0;
+      current = undefined;
+      queue.length = 0;
+      seen.clear();
+    };
 
     const deliver = () => {
       if (current || queue.length === 0) return;
       const item = queue.shift()!;
-      current = { item, text: itemText(item), injected: false, completed: false };
+      current = { item, text: itemText(item), injected: false };
       pi.sendUserMessage(current.text, { deliverAs: "followUp" });
     };
 
-    const acknowledge = (id: number) =>
-      new Promise<void>(resolve => deps.execFile(deps.shephrd, ["inbox", "ack", String(id)], () => resolve()));
-
-    pi.on("session_start", async (_event, ctx) => {
-      if (ctx.mode !== "tui" || deps.env.SHEPHRD_RUN_TOKEN) return;
-      for (const entry of ctx.sessionManager.getBranch()) {
-        if (entry.type === "custom" && entry.customType === "shephrd-inbox") {
-          after = Math.max(after, (entry.data as { item: number }).item);
-        }
-      }
-      child = deps.spawn(deps.shephrd, ["inbox", "wait", "--after", String(after)], { stdio: ["ignore", "pipe", "pipe"] });
-      child.stdout?.on("data", chunk => {
+    const watch = (ctx: ExtensionContext) => {
+      buffer = "";
+      const boundSession = session;
+      const waiting = deps.spawn(deps.shephrd, ["inbox", "wait", "--after", String(after)], { stdio: ["ignore", "pipe", "ignore"] });
+      child = waiting;
+      waiting.stdout?.on("data", chunk => {
+        if (stopped || session !== boundSession || child !== waiting) return;
         buffer += String(chunk);
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
@@ -73,44 +80,46 @@ export function createShephrdInbox(deps: Dependencies = { spawn, execFile, sheph
           if (!line.trim()) continue;
           try {
             const item = JSON.parse(line) as Item;
-            if (item.id > after && !queue.some(queued => queued.id === item.id) && current?.item.id !== item.id) queue.push(item);
+            if (!seen.has(item.id)) {
+              seen.add(item.id);
+              after = Math.max(after, item.id);
+              queue.push(item);
+            }
           } catch {
-            ctx.ui?.notify?.(`Shephrd inbox wait printed invalid output`, "warning");
+            ctx.ui?.notify?.("Shephrd inbox wait printed invalid output", "warning");
           }
         }
         deliver();
       });
-      child.stderr?.on("data", chunk => ctx.ui?.notify?.(`Shephrd inbox: ${String(chunk).trim()}`, "warning"));
-      child.on("exit", () => {
+      waiting.on("error", () => {});
+      waiting.on("close", () => {
+        if (stopped || session !== boundSession || child !== waiting) return;
         child = undefined;
+        retry = setTimeout(() => {
+          if (!stopped && session === boundSession) watch(ctx);
+        }, 1000);
       });
+    };
+
+    pi.on("session_start", async (_event, ctx) => {
+      stopWatch();
+      if (ctx.mode !== "tui" || deps.env.SHEPHRD_RUN_TOKEN) return;
+      stopped = false;
+      watch(ctx);
     });
 
     pi.on("message_start", async event => {
       if (current && event.message.role === "user" && messageText(event.message) === current.text) current.injected = true;
     });
 
-    pi.on("message_end", async event => {
-      if (current?.injected && event.message.role === "assistant") {
-        current.completed = event.message.stopReason !== "aborted" && event.message.stopReason !== "error";
-      }
-    });
-
     pi.on("agent_settled", async () => {
       if (!current?.injected) return;
-      const { item, completed } = current;
-      if (completed) {
-        await acknowledge(item.id);
-        pi.appendEntry("shephrd-inbox", { item: item.id });
-        after = Math.max(after, item.id);
-      }
       current = undefined;
       deliver();
     });
 
     pi.on("session_shutdown", async () => {
-      child?.kill();
-      child = undefined;
+      stopWatch();
     });
   };
 }

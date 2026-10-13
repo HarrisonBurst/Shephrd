@@ -36,7 +36,7 @@ On a single machine, that machine is the home host and nothing is forwarded. Thi
 | `hermes` | Client host | The main driver, whose commands are forwarded to `workhorse` |
 | `laptop` | Worker host, or its own installation | Extra sub-drivers and workers for `workhorse`, or a separate Shephrd with its own home |
 
-The main driver on `hermes` is just a caller. If `hermes` goes down, work on `workhorse` continues and results wait for it. A `laptop` used as a worker host can sleep: its runs then have liveness `unknown`, and anything that needs them gone is refused until it returns. Route only work that tolerates that to it.
+The main driver on `hermes` is just a caller. It connects outbound over SSH as `driver:main`, including for `inbox wait`; there is no driver registry, main-driver run or home-to-client injection. If `hermes` goes down, work on `workhorse` continues and results wait for it. A `laptop` used as a worker host can sleep: its runs then have liveness `unknown`, and anything that needs them gone is refused until it returns. Route only work that tolerates that to it.
 
 ## Requests
 
@@ -52,7 +52,7 @@ Over SSH, the client sends one JSON object in the SSH command: `{"v":1,"argv":[.
 
 ## Responses
 
-- **Success:** one JSON object on stdout. Watch commands write JSON lines and accept `--after <seq>` to resume where a dropped stream stopped.
+- **Success:** one JSON object on stdout. Watch commands write JSON lines and accept `--after` to resume; `inbox wait` uses an item ID cursor and rescans pending unacknowledged items at or below that cursor on each connection. Idle watches print no line or heartbeat.
 - **Warnings:** a successful result may carry `warnings`, a list of `{kind, message}`, for conditions the caller should know about without failing, such as `daemon_not_running`.
 - **Failure:** one JSON object on stderr: `{"error":{"kind":"...","message":"...","next":[["shephrd","task","show","t_1"]]}}`. `next` lists exact commands that safely move forward, when there are any.
 - **Exit codes:**
@@ -85,7 +85,7 @@ A remote driver is limited by what it owns and what it has been granted, not by 
 ## Retries and versions
 
 - Mutations are idempotent by key, so the transport retries a forwarded request after a connection failure with the same key, a bounded number of times, then exits `3`.
-- Reads are always safe to retry.
+- Reads are always safe to retry. A dropped remote `inbox wait` can be restarted with its last received item ID; the home host rescans pending items under the SSH key's driver identity. Consumers deduplicate repeated IDs and acknowledge only after handling.
 - The request carries the protocol version. A mismatch is refused with `version_mismatch` naming both versions. All hosts run the same release; there are no compatibility shims.
 - JSON fields are a contract within a version. Additions are allowed; removals and renames need a new version.
 
@@ -150,7 +150,7 @@ Each command's behavior is defined by the spec named in its row.
 | `workspace reconcile` | Classify interrupted effects on every host | [Execution](execution.md) |
 | `host list` | Hosts with reachability, version and installed providers | [Execution](execution.md) |
 | `report progress`, `question`, `result`, `blocker`, `note` | A run reports on its own task | [Notification](notifications.md) |
-| `inbox`, `inbox ack`, `inbox wait` | A driver reads, acknowledges, or streams items needing attention | [Notification](notifications.md) |
+| `inbox`, `inbox wait --after <item>`, `inbox ack <item>` | The owner reads or watches its pending items, then explicitly acknowledges handled ones | [Notification](notifications.md) |
 | `task accept` (`task deliver` compatibility alias), `task verify`, `task discard` | Accept or land a result, re-check landing proof, discard work | [Artifacts](artifacts.md) |
 | `grant`, `grant revoke` | Delegate or revoke `land` and `discard` authority | [Artifacts](artifacts.md) |
 | `artifact show`, `artifact read` | Read an artifact's metadata or bytes | [Artifacts](artifacts.md) |

@@ -6,7 +6,7 @@
 
 Notification and result flow carries what sessions report up to the owner that delegated to them, and carries replies and new requests back down, until someone takes responsibility for each. It decides when an owner needs a new turn and wakes it. It never decides lifecycle outcomes: handling a notification is evidence, never approval.
 
-**Owns:** the `report` command, which reports count as a finished turn, routing to owners, the inbox for drivers, waking sub-drivers and workers for continuation turns, and push delivery to drivers.
+**Owns:** the `report` command, which reports count as a finished turn, routing to owners, one durable owner-scoped inbox for each driver, waking sub-drivers and workers for continuation turns, and optional push delivery to drivers.
 
 **Does not own:** the event log and task state ([coordination](coordination.md)), starting and stopping runs ([session execution](execution.md)), whether a result is valid or accepted ([artifacts and authority](artifacts.md)), or the daemon and event subscriptions themselves ([plugins and extensibility](extensibility.md#dispatcher)).
 
@@ -68,19 +68,19 @@ The daemon starts continuation turns through session execution, under coordinati
 
 ## Inbox
 
-A driver's inbox is the durable record of the items that need its attention: questions, results, blockers and held tasks among its root tasks. Drivers normally learn about new items by [push](#push-delivery); the inbox commands read and settle them.
+A driver's inbox is the durable record of the items that need its attention: questions, results, blockers and held tasks among its root tasks. `inbox` and `inbox wait` are the sole consumer interface. No delivery configuration is required for a main driver to receive items.
 
 - **`inbox`** lists pending items, each with the event, the task and its current state, and the exact commands to read more, reply or acknowledge.
 - **`inbox ack <item>`** marks an item handled.
-- **`inbox wait [--after <item>]`** is for a driver that would rather hold a connection open than receive pushes. It blocks, without polling, and streams new items as JSON lines, resuming from a cursor after a dropped connection.
+- **`inbox wait [--after <item>]`** holds a connection open and emits one JSON line per real pending item. On connection start it rescans pending items, including unacknowledged IDs at or below `--after`, then streams newer IDs. Within a connection each ID is emitted once; reconnecting may repeat an unacknowledged ID. An idle stream emits no heartbeat, blank line or empty result. Resume after a dropped connection with the last received item ID and deduplicate by ID.
 
 An item is `pending` until acknowledged. Acknowledging means "handled," not "answered" or "approved." Answering is `task send`, and approving is an artifacts and authority action. Acknowledging the same item again is a no-op. Closing a task acknowledges its pending items automatically, recorded as a system acknowledgement.
 
-There are no claims or leases. Delivery is at least once, and consumers deduplicate by item ID. A driver should have one consumer at a time. Two consumers are safe, since acknowledgement grants nothing, but may handle an item twice.
+There are no claims or leases. Delivery is at least once, and consumers deduplicate by item ID without losing pending items after interruption. A driver should have one consumer at a time. Two consumers are safe, since acknowledgement grants nothing, but may handle an item twice. Only the owner can acknowledge an item, explicitly after handling it; a transport receipt or turn ending is not handling.
 
 ## Push delivery
 
-Push is how drivers normally learn about new items, so nothing polls. Configuration names a `delivery` provider for each driver, and the daemon calls it as soon as an item is added. A webhook provider is built in; others, such as one that starts a turn in a Pi session, are plugins.
+Optional push delivery remains available for webhook and plugin integrations. Configuration names a `delivery` provider for a driver when wanted, and the daemon calls it as soon as an item is added. The built-in webhook and existing plugin provider contracts remain compatible. A transport receipt is never inbox acknowledgement. First-party interactive drivers consume `inbox wait` directly rather than registering a delivery provider.
 
 ```toml
 [drivers.main.delivery]
@@ -102,7 +102,7 @@ sequenceDiagram
     W->>SD: report result
     D->>SD: continuation turn after settle window
     SD->>M: report result --request 3
-    D->>M: push inbox item
+    D->>M: inbox item (optional push or inbox wait)
     M->>SD: task send --reply-to, or a new request
     M->>M: inbox ack
 ```
@@ -117,6 +117,7 @@ sequenceDiagram
 | Daemon not running | Reports and inbox still work; no turns start and nothing is pushed until it starts. Every command warns `daemon_not_running`. |
 | Continuation turn blocked by a `task.start` gate | Task `held` with reason `start_blocked`; its owner is woken. |
 | Push delivery keeps failing | Retried with capped backoff; the item stays pending and readable with `inbox`. |
+| Inbox watch disconnects, locally or over SSH | Reconnect as the same driver with the last received ID; pending unacknowledged IDs are rescanned. A failed connection cannot acknowledge an item. |
 
 ## Extensibility
 
@@ -145,7 +146,7 @@ Reports themselves are coordination's `task.progress`, `task.question`, `task.re
 |---|---|---|---|
 | `delivery` | Driver, item, task summary, event body, and exact commands to read, reply and acknowledge | `delivered`, `retryable` or `rejected`, with a bounded detail | Webhook, signed, with a stable delivery ID per item for deduplication |
 
-Delivery into a Pi session is a first-party Pi extension that holds `inbox wait` and acknowledges each item after the turn that handled it. Desktop notifications are an event subscriber, the first-party `macos-notify` plugin, not a delivery provider.
+The first-party Pi extension holds `inbox wait`, sends each real item into a follow-up turn with its ID and exact read/reply/ack commands, and leaves acknowledgement to the agent after actual handling. The Claude Code main-driver skill arms its own long-running background `inbox wait` on session start; each real stdout JSON line is a turn-level notification, and idle/reconnect output never creates a turn. Neither a separate terminal nor an external socket/SDK sender is involved. Codex can use the generic inbox/watch commands, but has no first-party turn delivery here. Desktop notifications remain an event subscriber, the first-party `macos-notify` plugin, not a delivery provider.
 
 ### Limits
 
@@ -156,6 +157,6 @@ Plugins never acknowledge for another driver, answer on a driver's behalf, or st
 1. **No claims or leases.** At-least-once delivery with explicit acknowledgement and deduplication by item ID replaces drain, renew, claim tokens, parking and pump.
 2. **Driver turns coalesce** over a settle window, 5 seconds by default and configurable.
 3. **A `report.result` gate**, so plugins can enforce result policy while the agent can still fix it.
-4. **Push first.** Drivers learn about items by push, with a built-in webhook provider. `inbox wait` is available for drivers that hold a connection instead. Nothing polls.
+4. **Inbox first.** Interactive drivers consume the durable inbox directly, with optional webhook/plugin push retained. `inbox wait` blocks when idle and rescans pending IDs on reconnect.
 5. **Closing a task acknowledges its pending items**, recorded as a system acknowledgement.
 6. **Reports carry summaries; large content moves by reference.** Reports are bounded at 8 KiB and notes at 4 KiB. Documents and other large results are deliverables, stored and passed on by artifacts and authority, so a driver reads them only if it chooses to.
