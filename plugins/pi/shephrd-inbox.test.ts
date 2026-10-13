@@ -17,6 +17,7 @@ function harness(env: Record<string, string> = {}) {
   const sent: string[] = [];
   const spawned: string[][] = [];
   const children: Array<EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill(): void }> = [];
+  const killed: number[] = [];
   const pi = {
     on: (name: string, handler: any) => (handlers[name] = handler),
     sendUserMessage: (text: string) => sent.push(text),
@@ -24,7 +25,9 @@ function harness(env: Record<string, string> = {}) {
   const deps = {
     spawn: ((_cmd: string, args: string[]) => {
       spawned.push(args);
-      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill() {} });
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(), stderr: new EventEmitter(), kill() { killed.push(children.indexOf(child)); },
+      });
       children.push(child);
       return child;
     }) as any,
@@ -33,7 +36,7 @@ function harness(env: Record<string, string> = {}) {
   };
   createShephrdInbox(deps)(pi as any);
   const ctx = { mode: "tui", ui: { notify() {} } };
-  return { handlers, sent, spawned, children, ctx };
+  return { handlers, sent, spawned, children, killed, ctx };
 }
 
 async function turn(h: ReturnType<typeof harness>, text: string) {
@@ -92,6 +95,34 @@ test("an item not acknowledged, including after a failed ack, is rescanned on re
   second.children[0].stdout.emit("data", JSON.stringify(item(1)) + "\n");
   assert.deepEqual(second.sent, [itemText(item(1))]);
   await second.handlers.session_shutdown({});
+});
+
+test("same extension instance rescans an unacknowledged item after session switch", async () => {
+  const h = harness();
+  await h.handlers.session_start({}, h.ctx);
+  h.children[0].stdout.emit("data", JSON.stringify(item(1)) + "\n");
+  await h.handlers.session_shutdown({});
+  await h.handlers.session_start({}, h.ctx);
+  assert.deepEqual(h.killed, [0]);
+  assert.deepEqual(h.spawned[1], ["inbox", "wait", "--after", "0"]);
+  h.children[1].stdout.emit("data", JSON.stringify(item(1)) + "\n");
+  assert.deepEqual(h.sent, [itemText(item(1)), itemText(item(1))]);
+  await h.handlers.session_shutdown({});
+});
+
+test("stale watcher output cannot enter a newly bound session", async () => {
+  const h = harness();
+  await h.handlers.session_start({}, h.ctx);
+  h.children[0].stdout.emit("data", JSON.stringify(item(1)) + "\n");
+  await h.handlers.session_start({}, h.ctx);
+  assert.deepEqual(h.killed, [0]);
+  h.children[0].stdout.emit("data", JSON.stringify(item(2)) + "\n");
+  h.children[0].emit("close", 255);
+  assert.deepEqual(h.sent, [itemText(item(1))]);
+  assert.deepEqual(h.spawned[1], ["inbox", "wait", "--after", "0"]);
+  h.children[1].stdout.emit("data", JSON.stringify(item(1)) + "\n");
+  assert.deepEqual(h.sent, [itemText(item(1)), itemText(item(1))]);
+  await h.handlers.session_shutdown({});
 });
 
 test("reconnect rescans pending IDs and deduplicates within a session", async () => {

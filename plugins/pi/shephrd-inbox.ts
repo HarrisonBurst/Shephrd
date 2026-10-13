@@ -37,12 +37,27 @@ export function createShephrdInbox(deps: Dependencies = { spawn, shephrd: "sheph
   return function (pi: ExtensionAPI) {
     let child: ReturnType<typeof spawn> | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    let stopped = false;
+    let stopped = true;
+    let session = 0;
     let buffer = "";
     let after = 0;
     let current: { item: Item; text: string; injected: boolean } | undefined;
     const queue: Item[] = [];
     const seen = new Set<number>();
+
+    const stopWatch = () => {
+      stopped = true;
+      session++;
+      if (retry) clearTimeout(retry);
+      retry = undefined;
+      child?.kill();
+      child = undefined;
+      buffer = "";
+      after = 0;
+      current = undefined;
+      queue.length = 0;
+      seen.clear();
+    };
 
     const deliver = () => {
       if (current || queue.length === 0) return;
@@ -53,9 +68,11 @@ export function createShephrdInbox(deps: Dependencies = { spawn, shephrd: "sheph
 
     const watch = (ctx: ExtensionContext) => {
       buffer = "";
+      const boundSession = session;
       const waiting = deps.spawn(deps.shephrd, ["inbox", "wait", "--after", String(after)], { stdio: ["ignore", "pipe", "ignore"] });
       child = waiting;
       waiting.stdout?.on("data", chunk => {
+        if (stopped || session !== boundSession || child !== waiting) return;
         buffer += String(chunk);
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
@@ -76,13 +93,16 @@ export function createShephrdInbox(deps: Dependencies = { spawn, shephrd: "sheph
       });
       waiting.on("error", () => {});
       waiting.on("close", () => {
-        if (child !== waiting) return;
+        if (stopped || session !== boundSession || child !== waiting) return;
         child = undefined;
-        if (!stopped) retry = setTimeout(() => watch(ctx), 1000);
+        retry = setTimeout(() => {
+          if (!stopped && session === boundSession) watch(ctx);
+        }, 1000);
       });
     };
 
     pi.on("session_start", async (_event, ctx) => {
+      stopWatch();
       if (ctx.mode !== "tui" || deps.env.SHEPHRD_RUN_TOKEN) return;
       stopped = false;
       watch(ctx);
@@ -99,10 +119,7 @@ export function createShephrdInbox(deps: Dependencies = { spawn, shephrd: "sheph
     });
 
     pi.on("session_shutdown", async () => {
-      stopped = true;
-      if (retry) clearTimeout(retry);
-      child?.kill();
-      child = undefined;
+      stopWatch();
     });
   };
 }
