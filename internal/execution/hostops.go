@@ -84,6 +84,18 @@ type (
 		Branch string `json:"branch"`
 		Commit string `json:"commit"`
 	}
+	DeltaRequest struct {
+		Repo    string `json:"repo"`
+		Branch  string `json:"branch"`
+		Base    string `json:"base"`
+		Commit  string `json:"commit"`
+		Carrier string `json:"carrier"`
+	}
+	DeltaProof struct {
+		Premerge     string `json:"premerge"`
+		ExpectedTree string `json:"expected_tree"`
+		CarrierTree  string `json:"carrier_tree"`
+	}
 	StateResponse struct {
 		State string `json:"state"`
 	}
@@ -322,6 +334,12 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 		}
 		proven, err := ProveAncestry(req.Repo, req.Branch, req.Commit)
 		return map[string]bool{"proven": proven}, err
+	case "prove_delta":
+		req, err := decode[DeltaRequest](body)
+		if err != nil {
+			return nil, err
+		}
+		return ProveDelta(req)
 	}
 	return nil, fault.New("usage", "unknown host operation %q", op)
 }

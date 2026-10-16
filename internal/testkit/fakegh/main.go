@@ -22,6 +22,7 @@ type pr struct {
 	Title       string `json:"title"`
 	State       string `json:"state"`
 	MergeCommit string `json:"merge_commit"`
+	MergedHead  string `json:"merged_head"`
 }
 
 var dir = filepath.Join(os.Getenv("HOME"), ".fakegh")
@@ -77,8 +78,12 @@ func main() {
 		if _, err := os.Stat(filepath.Join(dir, "blocked")); err == nil {
 			mergeable = "BLOCKED"
 		}
+		head := p.MergedHead
+		if p.State != "MERGED" {
+			head = git(p.Repo, "rev-parse", "refs/heads/"+p.Head)
+		}
 		out := map[string]any{"state": p.State, "mergeable": mergeable, "url": url(*p), "baseRefName": p.Base,
-			"headRefOid": git(p.Repo, "rev-parse", "refs/heads/"+p.Head)}
+			"headRefOid": head}
 		if p.MergeCommit != "" {
 			out["mergeCommit"] = map[string]string{"oid": p.MergeCommit}
 		}
@@ -89,6 +94,7 @@ func main() {
 		save(prs)
 	case "merge":
 		p := find()
+		p.MergedHead = git(p.Repo, "rev-parse", "refs/heads/"+p.Head)
 		p.MergeCommit = merge(*p, flags)
 		p.State = "MERGED"
 		save(prs)
@@ -113,11 +119,17 @@ func merge(p pr, flags map[string]string) string {
 		git(clone, "merge", "-q", "--squash", "origin/"+p.Head)
 		git(clone, "commit", "-q", "-m", p.Title+" (#"+strconv.Itoa(p.Number)+")")
 	case flags["rebase"] == "true":
-		git(clone, "rebase", "-q", "origin/"+p.Head)
+		base := git(clone, "merge-base", "origin/"+p.Base, "origin/"+p.Head)
+		git(clone, "checkout", "-q", "-B", "replay", "origin/"+p.Head)
+		git(clone, "rebase", "-q", "--force-rebase", "--onto", "origin/"+p.Base, base)
 	default:
 		git(clone, "merge", "-q", "--no-ff", "-m", "Merge pull request #"+strconv.Itoa(p.Number), "origin/"+p.Head)
 	}
-	git(clone, "push", "-q", "origin", p.Base)
+	if flags["rebase"] == "true" {
+		git(clone, "push", "-q", "origin", "HEAD:refs/heads/"+p.Base)
+	} else {
+		git(clone, "push", "-q", "origin", p.Base)
+	}
 	return git(clone, "rev-parse", "HEAD")
 }
 
