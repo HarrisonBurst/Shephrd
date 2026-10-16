@@ -52,8 +52,31 @@ func (a *app) seal(caller Caller, t *coord.Task, body string, files []string) (*
 }
 
 func deliveryCommands(a *app) []*cobra.Command {
+	var title, body string
+	var draft bool
 	accept := &cobra.Command{Use: "accept <task>", Aliases: []string{"deliver"}, Short: "Accept a done task's result, or land its code", Args: cobra.ExactArgs(1)}
-	accept.RunE = a.run(func(_ *cobra.Command, args []string) (any, error) {
+	accept.Flags().StringVar(&title, "title", "", "pull request title")
+	accept.Flags().StringVar(&body, "body", "", "pull request body, or - for stdin")
+	accept.Flags().BoolVar(&draft, "draft", false, "open the pull request as a draft")
+	accept.RunE = a.run(func(cmd *cobra.Command, args []string) (any, error) {
+		options := artifact.PublishOptions{Draft: draft, DraftExplicit: cmd.Flags().Changed("draft")}
+		if cmd.Flags().Changed("title") {
+			if title == "" {
+				return nil, fault.New("usage", "pull request title cannot be empty")
+			}
+			value, err := a.text("title", title, coord.MaxTitle)
+			if err != nil {
+				return nil, err
+			}
+			options.Title = &value
+		}
+		if cmd.Flags().Changed("body") {
+			value, err := a.text("body", body, coord.MaxMessage)
+			if err != nil {
+				return nil, err
+			}
+			options.Body = &value
+		}
 		caller, db, t, err := a.readTask(args[0])
 		if err != nil {
 			return nil, err
@@ -69,7 +92,7 @@ func deliveryCommands(a *app) []*cobra.Command {
 			if err != nil {
 				return nil, err
 			}
-			out, err := s.Accept(a.ctx, caller, t)
+			out, err := s.Accept(a.ctx, caller, t, options)
 			if err != nil {
 				return nil, err
 			}

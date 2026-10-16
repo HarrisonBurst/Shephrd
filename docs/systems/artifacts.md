@@ -98,6 +98,7 @@ merge = "external"
 - Landing never touches the registered checkout.
 - A conflict, rejected push or failed merge leaves the task `done`. The owner can send the worker a message to fix it, which reopens the task.
 - Review changes work the same way: a message reopens the task, the worker commits, its new result seals a new commit, and `task accept` pushes it to the same pull request.
+- In `pull_request` mode, `task accept` may supply a PR title, body and `--draft` when publishing. When omitted, new PRs retain the task-reference/title and sealed-result-text defaults and open ready for review. The forge checks a known or discovered open PR before creation. An existing PR is reused without changing its title, body or draft state; explicitly supplied values (including `--draft=false`) must match its current metadata or publication is refused. Matching values allow safe retry after a creation whose recording failed. Multiple matching PRs or an unreadable or closed recorded PR are refused rather than guessed. Retargeting an existing PR remains independent of publication metadata. Draft PRs are not merged by Shephrd while draft.
 - Shephrd learns that a pull request merged from the forge plugin, typically through a forge webhook that runs `task verify`, so nothing polls. The owner can run `task verify` at any time too.
 
 ### Stacking
@@ -210,7 +211,7 @@ The `report.result` gate in [notification and result flow](notifications.md#inte
 
 | Type | Request | Response | Built-in |
 |---|---|---|---|
-| `forge` | Operation `publish` (open, or find, the pull request for a branch Shephrd already pushed, against a target branch), `merge`, `observe` (whether and how a pull request merged) or `retarget`, with repository and its remote, branch, sealed commit and task summary | Outcome `ok`, `pending` or `failed` with a reason; pull request reference, state, head and merge commit | None; `direct` mode needs no provider. The first-party `github` plugin uses the `gh` CLI |
+| `forge` | Operation `publish` (open, or find, the pull request for a branch Shephrd already pushed, against a target branch), `merge`, `observe` (whether and how a pull request merged) or `retarget`, with repository and its remote, branch, sealed commit and task summary. Publish carries effective title and body, booleans indicating whether each was explicitly supplied, and the requested draft state with an explicitness boolean. | Outcome `ok`, `pending` or `failed` with a reason; pull request reference, state, head and merge commit | None; `direct` mode needs no provider. The first-party `github` plugin uses the `gh` CLI |
 
 ### Limits
 

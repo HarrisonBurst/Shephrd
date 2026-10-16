@@ -85,6 +85,85 @@ func (f *forgeEnv) gh(t *testing.T, args ...string) {
 	}
 }
 
+func TestPublishPullRequestMetadataAndRetries(t *testing.T) {
+	f := withGitHub(t, "external", "merge")
+	f.OK("task", "create", "--repo", "api", "--title", "Fix API", "--objective", "Fix it")
+	f.OK("task", "start", "t_1")
+	f.WaitState("t_1", "done")
+	first := f.OK("task", "accept", "t_1", "--title", "Actual PR title", "--body", "Details for reviewers", "--draft", "--key", "initial")
+	if pr := first["pull_request"].(map[string]any); pr["ref"] != "1" || pr["state"] != "open" {
+		t.Fatalf("publication: %v", first)
+	}
+	p := f.pullRequests(t)[0]
+	if p["title"] != "Actual PR title" || p["body"] != "Details for reviewers" || p["isDraft"] != true {
+		t.Fatalf("created PR metadata: %v", p)
+	}
+	f.OK("task", "accept", "t_1", "--title", "Actual PR title", "--body", "Details for reviewers", "--draft", "--key", "initial")
+	f.OK("task", "deliver", "t_1", "--title", "Actual PR title", "--body", "Details for reviewers", "--draft", "--key", "repeat")
+	f.Refused("landing_failed", "task", "accept", "t_1", "--draft", "--title", "Other title")
+	f.Refused("landing_failed", "task", "accept", "t_1", "--body", "Other body")
+	f.Refused("landing_failed", "task", "accept", "t_1", "--draft=false")
+	f.editPRs(t, func(prs []map[string]any) []map[string]any { prs[0]["isDraft"] = false; return prs })
+	f.Refused("landing_failed", "task", "accept", "t_1", "--draft")
+	f.OK("task", "accept", "t_1", "--draft=false")
+	if prs := f.pullRequests(t); len(prs) != 1 || prs[0]["title"] != "Actual PR title" || prs[0]["body"] != "Details for reviewers" || prs[0]["isDraft"] != false {
+		t.Fatalf("retry changed existing PR metadata: %v", prs)
+	}
+	f.editPRs(t, func(prs []map[string]any) []map[string]any { prs[0]["state"] = "CLOSED"; return prs })
+	f.Refused("landing_failed", "task", "accept", "t_1")
+	if len(f.pullRequests(t)) != 1 {
+		t.Fatal("closed recorded PR was replaced")
+	}
+}
+
+func TestPublishDefaultsAndDiscoveredPullRequest(t *testing.T) {
+	f := withGitHub(t, "external", "merge")
+	f.OK("task", "create", "--repo", "api", "--title", "Fix API", "--objective", "Fix it")
+	f.OK("task", "start", "t_1")
+	f.WaitState("t_1", "done")
+	art := f.OK("task", "show", "t_1")["artifact"].(map[string]any)
+	f.OK("task", "deliver", "t_1")
+	p := f.pullRequests(t)[0]
+	if p["title"] != "t_1: Fix API" || p["body"] != art["text"] || p["isDraft"] != false {
+		t.Fatalf("default publication metadata: %v", p)
+	}
+
+	f.OK("task", "create", "--repo", "api", "--objective", "Preexisting PR")
+	f.OK("task", "start", "t_2")
+	f.WaitState("t_2", "done")
+	commit := f.OK("task", "show", "t_2")["artifact"].(map[string]any)["commit"].(string)
+	testkit.Git(t, f.clone, "push", "-q", f.origin, commit+":refs/heads/shephrd/t_2/1")
+	f.gh(t, "pr", "create", "--repo", f.origin, "--head", "shephrd/t_2/1", "--base", "main", "--title", "External title", "--body", "External body")
+	f.Refused("landing_failed", "task", "accept", "t_2", "--draft")
+	f.Refused("landing_failed", "task", "accept", "t_2", "--title", "Different")
+	f.OK("task", "accept", "t_2", "--title", "External title", "--body", "External body")
+	if prs := f.pullRequests(t); len(prs) != 2 || prs[1]["title"] != "External title" || prs[1]["body"] != "External body" || prs[1]["isDraft"] != false {
+		t.Fatalf("discovered PR changed or duplicated: %v", prs)
+	}
+	f.OK("task", "create", "--repo", "api", "--objective", "Another change")
+	f.OK("task", "start", "t_3")
+	f.WaitState("t_3", "done")
+	out := f.Run("Multiline description\nfrom stdin\n", "task", "accept", "t_3", "--body", "-")
+	if out.Code != 0 {
+		t.Fatalf("stdin body: %v", out)
+	}
+	last := f.pullRequests(t)[2]
+	if last["title"] != "t_3: Another change" || last["body"] != "Multiline description\nfrom stdin\n" || last["isDraft"] != false {
+		t.Fatalf("mixed default and supplied PR fields: %v", last)
+	}
+}
+
+func TestDraftPullRequestWaitsForReviewBeforeShephrdMerge(t *testing.T) {
+	f := withGitHub(t, "shephrd", "merge")
+	f.OK("task", "create", "--repo", "api", "--objective", "Fix it")
+	f.OK("task", "start", "t_1")
+	f.WaitState("t_1", "done")
+	out := f.OK("task", "accept", "t_1", "--draft")
+	if out["pending"] != "the pull request is a draft" || f.Task("t_1")["state"] != "done" {
+		t.Fatalf("draft was merged: %v", out)
+	}
+}
+
 func TestStackedPullRequestsAndASquashMergeProvenByTheForge(t *testing.T) {
 	f := withGitHub(t, "external", "squash")
 	f.OK("task", "create", "--repo", "api", "--objective", "Add the API")
