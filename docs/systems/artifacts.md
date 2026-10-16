@@ -123,9 +123,10 @@ The owner decides what to do, typically telling the worker to rebase. Shephrd ne
 Code is accepted only when core proves it is on the default branch:
 
 - **Ancestry:** the sealed commit is reachable from the default branch, on the remote when there is one. Core checks this itself.
-- **Recorded merge:** a pull request merged on a forge that records it, such as GitHub or GitLab, read through that forge's plugin. Core checks that the pull request's head is the sealed commit and its merge commit is on the default branch, and records the proof as coming from that forge. This is how squash and rebase merges are proven, since they break ancestry.
+- **Recorded merge:** only a durable pull-request publication for the *current* sealed artifact in this repository can identify the candidate PR. Core requires a readable, merged forge record and a merge carrier reachable from the remote default branch. Forge state and reachability establish lineage, not landed content. A live PR head may have moved or been deleted after merge; it is not a historical merged-head attestation. If the forge supplies a reliable historical merged head, it must match the sealed commit. Without one, the artifact-bound publication and exact content proof below are both required. Missing, unreadable, closed-unmerged or mismatched evidence cannot close the task; `task verify` never adopts an unrecorded PR.
+- **Rewritten history content:** for a squash or provable single-commit rebase, core takes the immutable sealed artifact's task-only `Base -> Commit` delta, applies it to the carrier's first parent (the premerge tree) in an isolated index, and requires the resulting **full Git tree ID** to equal the carrier's tree ID. Conflicts, missing objects, changed file modes, extra or omitted landed changes fail proof. An unrelated commit already in the premerge parent is allowed; later unrelated commits on the default branch do not affect proof. For stacked work the sealed Base is the parent's sealed commit: only the child's delta is replayed, never the parent's changes. A carrier not reachable from default is not proof. Multi-commit rebase needs a forge-attested, unambiguous premerge boundary and complete landed commit range; the last rewritten commit's first parent alone is insufficient. Without that range evidence, ambiguous multi-commit rebase fails closed rather than guessing a boundary. Proof records the sealed base and commit, PR, carrier, premerge parent, compared tree IDs, kind and source.
 
-`task verify <task>` re-checks proof for code merged outside Shephrd. Verification never changes repository history.
+`task verify <task>` re-checks proof for code merged outside Shephrd. Verification never publishes code, changes repository history or requires a `land` grant.
 
 ## Discard and release
 
@@ -222,6 +223,6 @@ Plugins never mark a task accepted, create or widen grants except through `grant
 3. **Shephrd lands code itself**, using each repository's landing mode: `direct`, or `pull_request` merged by Shephrd or externally. There is no default mode. `task verify` proves merges done outside Shephrd.
 4. **Authority:** standing grants are declared in configuration, runtime grants delegate down the tree, and by default only the main driver can land and discard.
 5. **Reports are sealed when the result is reported**, and passed on as files beside the dependent's workspace rather than inside its brief.
-6. **Code is proven by ancestry or by a merged pull request recorded on a forge**, which also covers squash and rebase merges.
+6. **Code is proven by ancestry or by a merged pull request recorded on a forge with exact task-only content proof** for rewritten history. Unattested multi-commit rebase ranges are not proven.
 7. **Closing a task releases clean workspaces automatically**; dirty ones stay held until discarded.
 8. **Published and merged milestones.** In `pull_request` repositories, dependent tasks stack on published work by default, and `--until merged` waits for the merge instead.

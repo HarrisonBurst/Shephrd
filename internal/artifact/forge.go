@@ -99,9 +99,8 @@ func (s *Service) forge(ctx context.Context, landing config.Landing, t *coord.Ta
 	return nil, fault.New("plugin_failed", "forge %s answered %s with outcome %q", landing.Forge, req.Operation, resp.Outcome)
 }
 
-// pullRequest is the task's latest pull request, if it has one.
-func pullRequest(q coord.Querier, task int64) (ref, url string, err error) {
-	err = q.QueryRow(`SELECT pull_request, detail FROM landings WHERE task = ? AND pull_request != '' ORDER BY id DESC LIMIT 1`, task).Scan(&ref, &url)
+func pullRequest(q coord.Querier, task, artifact int64) (ref, url string, err error) {
+	err = q.QueryRow(`SELECT pull_request, detail FROM landings WHERE task = ? AND (? = 0 OR artifact = ?) AND mode = 'pull_request' AND outcome = 'published' AND pull_request != '' ORDER BY id DESC LIMIT 1`, task, artifact, artifact).Scan(&ref, &url)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", nil
 	}
@@ -144,7 +143,7 @@ func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coo
 		})
 		return nil, err
 	}
-	existing, _, err := pullRequest(s.DB, t.ID)
+	existing, _, err := pullRequest(s.DB, t.ID, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +156,9 @@ func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coo
 			return recordLanding(tx, c, t, art, landing.Mode, "failed", nil, fault.As(err).Message)
 		})
 		return nil, err
+	}
+	if published.PullRequest == "" || published.URL == "" {
+		return nil, fault.New("landing_failed", "forge %s did not identify the published pull request", landing.Forge)
 	}
 	pr := &PullRequest{Ref: published.PullRequest, URL: published.URL, Target: target, State: "open"}
 	err = s.DB.Write(ctx, func(tx *store.Tx) error {
@@ -206,28 +208,28 @@ func (s *Service) mergePullRequest(ctx context.Context, c coord.Caller, t *coord
 	return s.provePullRequest(ctx, c, t, art, landing, pr, false)
 }
 
-// provePullRequest closes a task whose pull request merged. Core proves
-// it: by ancestry, or for squash and rebase merges by the forge's record
-// that the sealed commit's pull request merged into the default branch.
 func (s *Service) provePullRequest(ctx context.Context, c coord.Caller, t *coord.Task, art *Artifact, landing config.Landing, pr *PullRequest, wake bool) (*Delivered, error) {
 	observed, err := s.forge(ctx, landing, t, ForgeRequest{Operation: "observe", Branch: art.Branch, Commit: art.Commit, PullRequest: pr.Ref})
 	if err != nil {
-		return nil, err
+		return nil, fault.New("not_proven", "pull request %s cannot be read: %v", pr.Ref, err).WithNext("task", "verify", t.Ref)
 	}
-	if observed.State != "merged" {
-		return nil, fault.New("not_proven", "pull request %s is %s", pr.Ref, observed.State).WithNext("task", "verify", t.Ref)
-	}
-	if observed.Head != art.Commit {
-		return nil, fault.New("not_proven", "pull request %s merged %s, not the sealed commit %s", pr.Ref, observed.Head, art.Commit)
+	if observed.State != "merged" || observed.PullRequest != pr.Ref || observed.URL == "" || observed.URL != pr.URL {
+		return nil, fault.New("not_proven", "pull request %s has no matching merged record", pr.Ref).WithNext("task", "verify", t.Ref)
 	}
 	repo, branch, host, err := s.repo(t)
 	if err != nil {
 		return nil, err
 	}
 	proof, source, rewritten := "ancestry", "git", false
+	var delta execution.DeltaProof
 	if !s.onBranch(ctx, host, repo, branch, art.Commit) {
-		if observed.MergeCommit == "" || !s.onBranch(ctx, host, repo, branch, observed.MergeCommit) {
-			return nil, fault.New("not_proven", "the merge of %s is not on %s", pr.Ref, branch).WithNext("task", "verify", t.Ref)
+		if observed.MergeCommit == "" {
+			return nil, fault.New("not_proven", "pull request %s has no merge carrier", pr.Ref)
+		}
+		if err := host.Call(ctx, "prove_delta", execution.DeltaRequest{
+			Repo: repo, Branch: branch, Base: art.Base, Commit: art.Commit, Carrier: observed.MergeCommit,
+		}, &delta); err != nil {
+			return nil, fault.New("not_proven", "pull request %s has no matching sealed delta: %v", pr.Ref, err).WithNext("task", "verify", t.Ref)
 		}
 		proof, source, rewritten = "recorded_merge", "forge:"+landing.Forge, true
 	}
@@ -236,8 +238,8 @@ func (s *Service) provePullRequest(ctx context.Context, c coord.Caller, t *coord
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO landings (task, artifact, mode, outcome, pull_request, merge_commit, proof, proof_source, detail, time)
-			VALUES (?, ?, ?, 'merged', ?, ?, ?, ?, ?, ?)`, t.ID, art.ID, landing.Mode, pr.Ref, observed.MergeCommit, proof, source, pr.URL, store.Timestamp(tx.Now)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO landings (task, artifact, mode, outcome, pull_request, merge_commit, proof, proof_source, detail, time, sealed_base, sealed_commit, premerge_parent, expected_tree, carrier_tree)
+			VALUES (?, ?, ?, 'merged', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, t.ID, art.ID, landing.Mode, pr.Ref, observed.MergeCommit, proof, source, pr.URL, store.Timestamp(tx.Now), art.Base, art.Commit, delta.Premerge, delta.ExpectedTree, delta.CarrierTree); err != nil {
 			return err
 		}
 		if _, err := tx.Emit("land.attempted", c.String(), t.ID, art.Attempt, 0, map[string]any{
@@ -276,7 +278,7 @@ func (s *Service) retargetStacked(ctx context.Context, t *coord.Task, landing co
 		return
 	}
 	for _, d := range dependents {
-		ref, _, err := pullRequest(s.DB, d.ID)
+		ref, _, err := pullRequest(s.DB, d.ID, d.ArtifactID)
 		if err != nil || ref == "" || d.ArtifactID == 0 {
 			continue
 		}
@@ -351,19 +353,24 @@ func StackBase(db *store.Store, cfg *config.Config) func(*coord.Task) (string, i
 }
 
 type Landing struct {
-	Mode        string `json:"mode"`
-	Outcome     string `json:"outcome"`
-	PullRequest string `json:"pull_request,omitempty"`
-	MergeCommit string `json:"merge_commit,omitempty"`
-	Proof       string `json:"proof,omitempty"`
-	Source      string `json:"proof_source,omitempty"`
-	Detail      string `json:"detail,omitempty"`
-	Time        string `json:"time"`
+	Mode           string `json:"mode"`
+	Outcome        string `json:"outcome"`
+	PullRequest    string `json:"pull_request,omitempty"`
+	MergeCommit    string `json:"merge_commit,omitempty"`
+	Proof          string `json:"proof,omitempty"`
+	Source         string `json:"proof_source,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+	Time           string `json:"time"`
+	SealedBase     string `json:"sealed_base,omitempty"`
+	SealedCommit   string `json:"sealed_commit,omitempty"`
+	PremergeParent string `json:"premerge_parent,omitempty"`
+	ExpectedTree   string `json:"expected_tree,omitempty"`
+	CarrierTree    string `json:"carrier_tree,omitempty"`
 }
 
 // Landings lists a task's landing attempts, oldest first.
 func Landings(q coord.Querier, task int64) ([]Landing, error) {
-	rows, err := q.Query(`SELECT mode, outcome, pull_request, merge_commit, proof, proof_source, detail, time FROM landings WHERE task = ? ORDER BY id`, task)
+	rows, err := q.Query(`SELECT mode, outcome, pull_request, merge_commit, proof, proof_source, detail, time, sealed_base, sealed_commit, premerge_parent, expected_tree, carrier_tree FROM landings WHERE task = ? ORDER BY id`, task)
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +378,7 @@ func Landings(q coord.Querier, task int64) ([]Landing, error) {
 	landings := []Landing{}
 	for rows.Next() {
 		var l Landing
-		if err := rows.Scan(&l.Mode, &l.Outcome, &l.PullRequest, &l.MergeCommit, &l.Proof, &l.Source, &l.Detail, &l.Time); err != nil {
+		if err := rows.Scan(&l.Mode, &l.Outcome, &l.PullRequest, &l.MergeCommit, &l.Proof, &l.Source, &l.Detail, &l.Time, &l.SealedBase, &l.SealedCommit, &l.PremergeParent, &l.ExpectedTree, &l.CarrierTree); err != nil {
 			return nil, err
 		}
 		landings = append(landings, l)

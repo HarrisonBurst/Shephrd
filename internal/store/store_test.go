@@ -20,13 +20,17 @@ func open(t *testing.T) *Store {
 
 func TestReopeningAppliesNoMigrationTwice(t *testing.T) {
 	s := open(t)
+	var before int
+	if err := s.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
 	again, err := Open(context.Background(), s.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer again.Close()
 	var count int
-	if err := again.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 1 {
+	if err := again.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != before {
 		t.Fatalf("migrations recorded %d, %v", count, err)
 	}
 }

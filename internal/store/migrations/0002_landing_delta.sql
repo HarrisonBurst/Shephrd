@@ -1,0 +1,5 @@
+ALTER TABLE landings ADD COLUMN sealed_base TEXT NOT NULL DEFAULT '';
+ALTER TABLE landings ADD COLUMN sealed_commit TEXT NOT NULL DEFAULT '';
+ALTER TABLE landings ADD COLUMN premerge_parent TEXT NOT NULL DEFAULT '';
+ALTER TABLE landings ADD COLUMN expected_tree TEXT NOT NULL DEFAULT '';
+ALTER TABLE landings ADD COLUMN carrier_tree TEXT NOT NULL DEFAULT '';

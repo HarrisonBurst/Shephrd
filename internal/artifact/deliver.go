@@ -241,7 +241,7 @@ func (s *Service) Verify(ctx context.Context, c coord.Caller, t *coord.Task) (*D
 	}
 	if !proof.Proven {
 		landing := s.Cfg.Repos[t.Repo].Landing
-		ref, url, err := pullRequest(s.DB, t.ID)
+		ref, url, err := pullRequest(s.DB, t.ID, art.ID)
 		if err != nil {
 			return nil, err
 		}
