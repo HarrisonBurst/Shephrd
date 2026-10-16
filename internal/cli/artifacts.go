@@ -61,12 +61,12 @@ func deliveryCommands(a *app) []*cobra.Command {
 	accept.RunE = a.run(func(cmd *cobra.Command, args []string) (any, error) {
 		options := artifact.PublishOptions{Draft: draft, DraftExplicit: cmd.Flags().Changed("draft")}
 		if cmd.Flags().Changed("title") {
-			if title == "" {
-				return nil, fault.New("usage", "pull request title cannot be empty")
-			}
 			value, err := a.text("title", title, coord.MaxTitle)
 			if err != nil {
 				return nil, err
+			}
+			if value == "" {
+				return nil, fault.New("usage", "pull request title cannot be empty")
 			}
 			options.Title = &value
 		}

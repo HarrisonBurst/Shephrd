@@ -85,6 +85,23 @@ func (f *forgeEnv) gh(t *testing.T, args ...string) {
 	}
 }
 
+func TestEmptyStdinPRTitleRefusedBeforePublication(t *testing.T) {
+	f := withGitHub(t, "external", "merge")
+	f.OK("task", "create", "--repo", "api", "--objective", "Fix it")
+	f.OK("task", "start", "t_1")
+	f.WaitState("t_1", "done")
+	f.Run("", "task", "accept", "t_1", "--title", "-").Refusal(t, "usage")
+	if prs := f.pullRequests(t); len(prs) != 0 {
+		t.Fatalf("empty title published a PR: %v", prs)
+	}
+	if err := exec.Command("git", "--git-dir", f.origin, "show-ref", "--verify", "--quiet", "refs/heads/shephrd/t_1/1").Run(); err == nil {
+		t.Fatal("empty title pushed the task branch")
+	}
+	if landings := f.OK("task", "show", "t_1")["landings"].([]any); len(landings) != 0 {
+		t.Fatalf("empty title recorded publication: %v", landings)
+	}
+}
+
 func TestPublishPullRequestMetadataAndRetries(t *testing.T) {
 	f := withGitHub(t, "external", "merge")
 	f.OK("task", "create", "--repo", "api", "--title", "Fix API", "--objective", "Fix it")
