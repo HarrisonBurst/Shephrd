@@ -20,6 +20,8 @@ type pr struct {
 	Head        string `json:"head"`
 	Base        string `json:"base"`
 	Title       string `json:"title"`
+	Body        string `json:"body"`
+	IsDraft     bool   `json:"isDraft"`
 	State       string `json:"state"`
 	MergeCommit string `json:"merge_commit"`
 	MergedHead  string `json:"merged_head"`
@@ -68,7 +70,7 @@ func main() {
 		}
 		json.NewEncoder(os.Stdout).Encode(out)
 	case "create":
-		p := pr{Number: len(prs) + 1, Repo: flags["repo"], Head: flags["head"], Base: flags["base"], Title: flags["title"], State: "OPEN"}
+		p := pr{Number: len(prs) + 1, Repo: flags["repo"], Head: flags["head"], Base: flags["base"], Title: flags["title"], Body: flags["body"], IsDraft: flags["draft"] == "true", State: "OPEN"}
 		prs = append(prs, p)
 		save(prs)
 		fmt.Println(url(p))
@@ -82,7 +84,7 @@ func main() {
 		if p.State != "MERGED" {
 			head = git(p.Repo, "rev-parse", "refs/heads/"+p.Head)
 		}
-		out := map[string]any{"state": p.State, "mergeable": mergeable, "url": url(*p), "baseRefName": p.Base,
+		out := map[string]any{"state": p.State, "title": p.Title, "body": p.Body, "isDraft": p.IsDraft, "mergeable": mergeable, "url": url(*p), "baseRefName": p.Base,
 			"headRefOid": head}
 		if p.MergeCommit != "" {
 			out["mergeCommit"] = map[string]string{"oid": p.MergeCommit}
@@ -94,6 +96,9 @@ func main() {
 		save(prs)
 	case "merge":
 		p := find()
+		if p.IsDraft {
+			fail("draft pull request cannot merge")
+		}
 		p.MergedHead = git(p.Repo, "rev-parse", "refs/heads/"+p.Head)
 		p.MergeCommit = merge(*p, flags)
 		p.State = "MERGED"

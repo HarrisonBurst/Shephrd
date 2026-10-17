@@ -27,11 +27,15 @@ type forgeRequest struct {
 	Repo      struct {
 		Remote string `json:"remote"`
 	} `json:"repo"`
-	Branch      string `json:"branch"`
-	Target      string `json:"target"`
-	PullRequest string `json:"pull_request"`
-	Title       string `json:"title"`
-	Body        string `json:"body"`
+	Branch        string `json:"branch"`
+	Target        string `json:"target"`
+	PullRequest   string `json:"pull_request"`
+	Title         string `json:"title"`
+	Body          string `json:"body"`
+	TitleExplicit bool   `json:"title_explicit"`
+	BodyExplicit  bool   `json:"body_explicit"`
+	Draft         bool   `json:"draft"`
+	DraftExplicit bool   `json:"draft_explicit"`
 }
 
 type response struct {
@@ -92,6 +96,9 @@ func gh(args ...string) ([]byte, error) {
 
 type view struct {
 	State       string `json:"state"`
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	IsDraft     bool   `json:"isDraft"`
 	Mergeable   string `json:"mergeable"`
 	URL         string `json:"url"`
 	HeadRefOid  string `json:"headRefOid"`
@@ -103,7 +110,7 @@ type view struct {
 
 func viewPR(repo, number string) (view, error) {
 	var v view
-	out, err := gh("pr", "view", number, "--repo", repo, "--json", "state,mergeable,url,headRefOid,baseRefName,mergeCommit")
+	out, err := gh("pr", "view", number, "--repo", repo, "--json", "state,title,body,isDraft,mergeable,url,headRefOid,baseRefName,mergeCommit")
 	if err != nil {
 		return v, err
 	}
@@ -114,31 +121,51 @@ func handle(req forgeRequest, method string) (response, error) {
 	repo := repoSlug(req.Repo.Remote)
 	switch req.Operation {
 	case "publish":
+		var number string
 		if req.PullRequest != "" {
-			if v, err := viewPR(repo, req.PullRequest); err == nil && v.State == "OPEN" {
-				if v.BaseRefName != req.Target {
-					if _, err := gh("pr", "edit", req.PullRequest, "--repo", repo, "--base", req.Target); err != nil {
-						return response{}, err
-					}
-				}
-				return response{Outcome: "ok", PullRequest: req.PullRequest, URL: v.URL}, nil
+			number = req.PullRequest
+		} else {
+			out, err := gh("pr", "list", "--repo", repo, "--head", req.Branch, "--state", "open", "--json", "number,url")
+			if err != nil {
+				return response{}, err
+			}
+			var open []struct {
+				Number int    `json:"number"`
+				URL    string `json:"url"`
+			}
+			if err := json.Unmarshal(out, &open); err != nil {
+				return response{}, err
+			}
+			if len(open) > 1 {
+				return response{}, fmt.Errorf("multiple open pull requests for branch %s", req.Branch)
+			}
+			if len(open) == 1 {
+				number = fmt.Sprint(open[0].Number)
 			}
 		}
-		out, err := gh("pr", "list", "--repo", repo, "--head", req.Branch, "--state", "open", "--json", "number,url")
-		if err != nil {
-			return response{}, err
+		if number != "" {
+			v, err := viewPR(repo, number)
+			if err != nil {
+				return response{}, err
+			}
+			if v.State != "OPEN" {
+				return response{}, fmt.Errorf("pull request %s is %s, not open", number, v.State)
+			}
+			if (req.TitleExplicit && req.Title != v.Title) || (req.BodyExplicit && req.Body != v.Body) || (req.DraftExplicit && req.Draft != v.IsDraft) {
+				return response{}, fmt.Errorf("pull request %s already exists with different publication metadata; edit it on the forge or accept without metadata flags", number)
+			}
+			if v.BaseRefName != req.Target {
+				if _, err := gh("pr", "edit", number, "--repo", repo, "--base", req.Target); err != nil {
+					return response{}, err
+				}
+			}
+			return response{Outcome: "ok", PullRequest: number, URL: v.URL}, nil
 		}
-		var open []struct {
-			Number int    `json:"number"`
-			URL    string `json:"url"`
+		args := []string{"pr", "create", "--repo", repo, "--head", req.Branch, "--base", req.Target, "--title", req.Title, "--body", req.Body}
+		if req.Draft {
+			args = append(args, "--draft")
 		}
-		if err := json.Unmarshal(out, &open); err != nil {
-			return response{}, err
-		}
-		if len(open) > 0 {
-			return response{Outcome: "ok", PullRequest: fmt.Sprint(open[0].Number), URL: open[0].URL}, nil
-		}
-		out, err = gh("pr", "create", "--repo", repo, "--head", req.Branch, "--base", req.Target, "--title", req.Title, "--body", req.Body)
+		out, err := gh(args...)
 		if err != nil {
 			return response{}, err
 		}
@@ -151,6 +178,9 @@ func handle(req forgeRequest, method string) (response, error) {
 		}
 		if v.State == "MERGED" {
 			return response{Outcome: "ok", State: "merged"}, nil
+		}
+		if v.IsDraft {
+			return response{Outcome: "pending", Reason: "the pull request is a draft"}, nil
 		}
 		if v.Mergeable != "MERGEABLE" {
 			return response{Outcome: "pending", Reason: "the pull request is " + strings.ToLower(v.Mergeable)}, nil

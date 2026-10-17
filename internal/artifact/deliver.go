@@ -17,6 +17,15 @@ type Service struct {
 	Forge func(ctx context.Context, provider string, req ForgeRequest) (ForgeResponse, error)
 }
 
+type PublishOptions struct {
+	Title         *string
+	Body          *string
+	Draft         bool
+	DraftExplicit bool
+}
+
+func (o PublishOptions) supplied() bool { return o.Title != nil || o.Body != nil || o.DraftExplicit }
+
 type Delivered struct {
 	Task        *coord.Task       `json:"task"`
 	Artifact    *Artifact         `json:"artifact,omitempty"`
@@ -37,7 +46,7 @@ func (s *Service) repo(t *coord.Task) (path, branch string, host execution.Host,
 	return path, branch, host, err
 }
 
-func (s *Service) Accept(ctx context.Context, c coord.Caller, t *coord.Task) (*Delivered, error) {
+func (s *Service) Accept(ctx context.Context, c coord.Caller, t *coord.Task, options PublishOptions) (*Delivered, error) {
 	if t.State != "done" || t.ArtifactID == 0 {
 		return nil, fault.New("invalid_state", "%s is %s; only a done task with a result can be accepted", t.Ref, t.State).WithNext("task", "show", t.Ref)
 	}
@@ -50,6 +59,10 @@ func (s *Service) Accept(ctx context.Context, c coord.Caller, t *coord.Task) (*D
 	art, err := Load(s.DB, t.ArtifactID)
 	if err != nil {
 		return nil, err
+	}
+	landing := s.Cfg.Repos[t.Repo].Landing
+	if options.supplied() && (art.Kind != "code" || landing.Mode != "pull_request") {
+		return nil, fault.New("usage", "PR publication controls require a code task in pull_request landing mode")
 	}
 	out := &Delivered{Artifact: art, Released: []string{}, Retained: []string{}}
 	if art.Kind != "code" {
@@ -69,12 +82,11 @@ func (s *Service) Accept(ctx context.Context, c coord.Caller, t *coord.Task) (*D
 	if err != nil {
 		return nil, err
 	}
-	landing := s.Cfg.Repos[t.Repo].Landing
 	if landing.Mode == "" {
 		return nil, fault.New("landing_not_configured", "repository %s has no landing mode; set [repos.%s.landing] in the home host's configuration", t.Repo, t.Repo)
 	}
 	if landing.Mode == "pull_request" {
-		return s.deliverPullRequest(ctx, c, t, art, landing, grant)
+		return s.deliverPullRequest(ctx, c, t, art, landing, grant, options)
 	}
 	repo, branch, host, err := s.repo(t)
 	if err != nil {

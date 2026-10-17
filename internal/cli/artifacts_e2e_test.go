@@ -121,6 +121,28 @@ func TestDeliveryRefusals(t *testing.T) {
 	env.Refused("not_owner", "task", "deliver", "t_2")
 }
 
+func TestPRPublicationFlagsRequirePullRequestCode(t *testing.T) {
+	env, repo := withLanding(t, "fast-forward")
+	env.OK("task", "create", "--repo", "api", "--objective", "Fix it")
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_1", "done")
+	for _, args := range [][]string{{"--title", "Real title"}, {"--body", "Description"}, {"--draft"}, {"--draft=false"}} {
+		env.Refused("usage", append([]string{"task", "accept", "t_1"}, args...)...)
+	}
+	env.Refused("usage", "task", "accept", "t_1", "--title", "")
+	env.Refused("too_large", "task", "accept", "t_1", "--title", strings.Repeat("x", 201))
+	if head := testkit.Git(t, repo, "rev-parse", "HEAD"); head != testkit.Git(t, repo, "rev-parse", "main") {
+		t.Fatalf("refused flags landed code: %s", head)
+	}
+	if len(env.OK("task", "show", "t_1")["landings"].([]any)) != 0 {
+		t.Fatal("refused controls recorded a landing")
+	}
+	env.OK("task", "create", "--repo", "api", "--deliverable", "report", "--objective", "Research")
+	env.OK("task", "start", "t_2")
+	env.WaitState("t_2", "done")
+	env.Refused("usage", "task", "deliver", "t_2", "--draft")
+}
+
 func TestFastForwardRefusedWhenTheBranchMoved(t *testing.T) {
 	env, repo := withLanding(t, "fast-forward")
 	env.OK("task", "create", "--repo", "api", "--objective", "Fix it")
