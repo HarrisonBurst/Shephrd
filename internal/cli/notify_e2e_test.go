@@ -139,6 +139,168 @@ func TestSubDriverLoopEndsInTheMainDriversInbox(t *testing.T) {
 	}
 }
 
+func TestAnsweredDriverRequestCanAskAgain(t *testing.T) {
+	env, _ := withDaemon(t)
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")
+	request := strconv.Itoa(int(env.OK("task", "show", "t_1")["requests"].([]any)[0].(map[string]any)["seq"].(float64)))
+	env.Script(map[string][][]action{
+		"t_1": {
+			{
+				{"shephrd": []string{"task", "create", "--repo", "api", "--objective", "Investigate", "--deliverable", "report"}},
+				{"shephrd": []string{"task", "start", "t_2"}},
+				{"report": []string{"result", "Initial answer"}},
+				{"report": []string{"note", "Waiting on child"}},
+			},
+			{
+				{"report": []string{"question", "Which behavior?"}},
+				{"report": []string{"question", "Which behavior?", "--request", request}},
+				{"report": []string{"note", "Waiting for owner"}},
+			},
+			{
+				{"report": []string{"result", "Final answer"}},
+				{"report": []string{"note", "Finished"}},
+			},
+		},
+		"t_2": {{{"report": []string{"question", "Which behavior?"}}}, {{"report": []string{"result", "Investigated"}}}},
+	})
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_2", "waiting")
+	env.StartDaemon()
+	env.WaitState("t_1", "waiting")
+	if errs := commandErrors(env, "t_1"); len(errs) != 1 || !strings.Contains(errs[0], `"kind":"request_required"`) {
+		t.Fatalf("implicit follow-up should fail, explicit should succeed: %v", errs)
+	}
+	items := env.OK("inbox")["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("expected initial result and follow-up question: %v", items)
+	}
+	question := items[1].(map[string]any)
+	event := question["event"].(map[string]any)
+	if event["name"] != "task.question" || event["data"].(map[string]any)["request"] != float64(2) || question["task"] != "t_1" {
+		t.Fatalf("follow-up question: %v", question)
+	}
+	shown := env.OK("task", "show", "t_1")
+	requests := shown["requests"].([]any)
+	var original map[string]any
+	for _, entry := range shown["events"].([]any) {
+		event := entry.(map[string]any)
+		if event["name"] == "task.result" {
+			original = event
+		}
+	}
+	if original == nil {
+		t.Fatal("initial result event missing")
+	}
+	oldArtifact := original["data"].(map[string]any)["artifact"].(string)
+	if req := requests[0].(map[string]any); req["state"] != "asked" || req["result"] != nil {
+		t.Fatalf("question did not clear current answer: %v", req)
+	}
+	env.Refused("not_owner", "task", "send", "t_2", "Do this")
+	reply := toStrings(question["next"].(map[string]any)["reply"])
+	if out := env.Run("Use v2", reply[1:]...); out.Code != 0 {
+		t.Fatalf("owner reply: %+v", out)
+	}
+	env.Eventually("reply to reopen the request", func() bool {
+		req := env.OK("task", "show", "t_1")["requests"].([]any)[0].(map[string]any)
+		return req["state"] == "open"
+	})
+	env.WaitState("t_1", "done")
+	if errs := commandErrors(env, "t_1"); len(errs) != 1 {
+		t.Fatalf("follow-up result failed: %v", errs)
+	}
+	shown = env.OK("task", "show", "t_1")
+	var results []map[string]any
+	for _, entry := range shown["events"].([]any) {
+		if event := entry.(map[string]any); event["name"] == "task.result" {
+			results = append(results, event)
+		}
+	}
+	if len(results) != 2 || results[0]["seq"] != original["seq"] || results[1]["data"].(map[string]any)["artifact"] == oldArtifact ||
+		shown["requests"].([]any)[0].(map[string]any)["result"] != results[1]["seq"] {
+		t.Fatalf("result history/current answer: %v", shown)
+	}
+	if env.OK("artifact", "show", oldArtifact)["id"] != oldArtifact {
+		t.Fatalf("historical artifact %s missing", oldArtifact)
+	}
+	if items := env.OK("inbox")["items"].([]any); len(items) != 3 || items[2].(map[string]any)["event"].(map[string]any)["name"] != "task.result" {
+		t.Fatalf("result did not get a separate inbox item: %v", items)
+	}
+	if task := env.Task("t_2"); task["state"] != "waiting" {
+		t.Fatalf("child was automatically closed: %v", task)
+	}
+}
+
+func TestAnsweredDriverRequestCanReviseResult(t *testing.T) {
+	env, _ := withDaemon(t)
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")
+	first := strconv.Itoa(int(env.OK("task", "show", "t_1")["requests"].([]any)[0].(map[string]any)["seq"].(float64)))
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Other driver")
+	foreign := strconv.Itoa(int(env.OK("task", "show", "t_2")["requests"].([]any)[0].(map[string]any)["seq"].(float64)))
+	env.Script(map[string][][]action{"t_1": {
+		{{"report": []string{"result", "Initial answer"}}, {"report": []string{"note", "Waiting"}}},
+		{
+			{"report": []string{"progress", "Working on revision"}},
+			{"report": []string{"result", "Another answer"}},
+			{"report": []string{"result", "Implicit follow-up"}},
+			{"report": []string{"result", "Unknown request", "--request", "999999"}},
+			{"report": []string{"question", "Foreign question", "--request", foreign}},
+			{"report": []string{"result", "Foreign result", "--request", foreign}},
+			{"report": []string{"result", "Revised answer", "--request", first}},
+			{"report": []string{"note", "Finished"}},
+		},
+	}})
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_1", "done")
+	shown := env.OK("task", "show", "t_1")
+	initial := shown["requests"].([]any)[0].(map[string]any)["result"]
+	oldArtifact := shown["artifact"].(map[string]any)["id"].(string)
+	sent := env.OK("task", "send", "t_1", "Another request")
+	second := sent["seq"]
+	env.StartDaemon()
+	env.Eventually("revision turn", func() bool { return len(callsFor(env, "t_1", 1)) == 1 })
+	env.WaitState("t_1", "done")
+	errs := commandErrors(env, "t_1")
+	if len(errs) != 4 || !strings.Contains(errs[0], `"kind":"request_required"`) ||
+		!strings.Contains(errs[1], `"kind":"invalid_request"`) || !strings.Contains(errs[2], `"kind":"invalid_request"`) ||
+		!strings.Contains(errs[3], `"kind":"invalid_request"`) {
+		t.Fatalf("invalid requests were not refused: %v", errs)
+	}
+	shown = env.OK("task", "show", "t_1")
+	requests := shown["requests"].([]any)
+	if len(requests) != 2 || requests[0].(map[string]any)["result"] == initial || requests[0].(map[string]any)["state"] != "answered" ||
+		requests[1].(map[string]any)["seq"] != second || requests[1].(map[string]any)["state"] != "answered" {
+		t.Fatalf("request answers: %v", requests)
+	}
+	var results []map[string]any
+	for _, entry := range shown["events"].([]any) {
+		if event := entry.(map[string]any); event["name"] == "task.result" {
+			results = append(results, event)
+		}
+	}
+	if len(results) != 3 || results[0]["seq"] != initial || results[1]["seq"] != requests[1].(map[string]any)["result"] ||
+		results[2]["seq"] != requests[0].(map[string]any)["result"] || results[2]["data"].(map[string]any)["artifact"] == oldArtifact {
+		t.Fatalf("result lineage: %v", results)
+	}
+	if env.OK("artifact", "show", oldArtifact)["id"] != oldArtifact {
+		t.Fatalf("historical artifact %s missing", oldArtifact)
+	}
+	if items := env.OK("inbox")["items"].([]any); len(items) != 3 {
+		t.Fatalf("only result reports should reach the inbox: %v", items)
+	} else {
+		for _, entry := range items {
+			item := entry.(map[string]any)
+			if item["task"] != "t_1" || item["event"].(map[string]any)["name"] != "task.result" {
+				t.Fatalf("unexpected inbox item: %v", item)
+			}
+		}
+	}
+	if shown["task"].(map[string]any)["state"] != "done" {
+		t.Fatalf("result accepted the task: %v", shown["task"])
+	}
+	env.Vars["SHEPHRD_RUN_TOKEN"] = envOf(callsFor(env, "t_1", 1)[0])["SHEPHRD_RUN_TOKEN"]
+	env.Refused("stale_run", "report", "result", "Too late", "--request", first)
+}
+
 func TestReplyWakesTheWorker(t *testing.T) {
 	env, _ := withDaemon(t)
 	env.Script(map[string][][]action{"t_1": {
