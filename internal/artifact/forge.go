@@ -19,15 +19,19 @@ import (
 // the forge allows, observe reports whether and how it merged, and
 // retarget moves it onto another base branch.
 type ForgeRequest struct {
-	Operation   string    `json:"operation"`
-	Repo        ForgeRepo `json:"repo"`
-	Branch      string    `json:"branch"`
-	Target      string    `json:"target,omitempty"`
-	Commit      string    `json:"commit"`
-	PullRequest string    `json:"pull_request,omitempty"`
-	Title       string    `json:"title,omitempty"`
-	Body        string    `json:"body,omitempty"`
-	Task        string    `json:"task"`
+	Operation     string    `json:"operation"`
+	Repo          ForgeRepo `json:"repo"`
+	Branch        string    `json:"branch"`
+	Target        string    `json:"target,omitempty"`
+	Commit        string    `json:"commit"`
+	PullRequest   string    `json:"pull_request,omitempty"`
+	Title         string    `json:"title,omitempty"`
+	Body          string    `json:"body,omitempty"`
+	TitleExplicit bool      `json:"title_explicit,omitempty"`
+	BodyExplicit  bool      `json:"body_explicit,omitempty"`
+	Draft         bool      `json:"draft,omitempty"`
+	DraftExplicit bool      `json:"draft_explicit,omitempty"`
+	Task          string    `json:"task"`
 }
 
 type ForgeRepo struct {
@@ -125,7 +129,7 @@ func (s *Service) stackedOn(t *coord.Task) (*coord.Task, *Artifact, error) {
 // deliverPullRequest pushes the sealed commit to the attempt branch and
 // opens its pull request, against the stacked dependency's branch while
 // that is unmerged. It merges right away only when Shephrd merges.
-func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coord.Task, art *Artifact, landing config.Landing, grant string) (*Delivered, error) {
+func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coord.Task, art *Artifact, landing config.Landing, grant string, options PublishOptions) (*Delivered, error) {
 	repo, branch, host, err := s.repo(t)
 	if err != nil {
 		return nil, err
@@ -147,9 +151,17 @@ func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coo
 	if err != nil {
 		return nil, err
 	}
+	title, body := t.Ref+": "+t.Title, art.Text
+	if options.Title != nil {
+		title = *options.Title
+	}
+	if options.Body != nil {
+		body = *options.Body
+	}
 	published, err := s.forge(ctx, landing, t, ForgeRequest{
 		Operation: "publish", Repo: ForgeRepo{Remote: push.Remote}, Branch: art.Branch, Target: target,
-		Commit: art.Commit, PullRequest: existing, Title: t.Ref + ": " + t.Title, Body: art.Text,
+		Commit: art.Commit, PullRequest: existing, Title: title, Body: body,
+		TitleExplicit: options.Title != nil, BodyExplicit: options.Body != nil, Draft: options.Draft, DraftExplicit: options.DraftExplicit,
 	})
 	if err != nil {
 		s.DB.Write(ctx, func(tx *store.Tx) error {

@@ -47,6 +47,7 @@ A request is argv plus optional stdin.
 - **`--key`** is accepted by every mutating command. The CLI generates one when absent, and the transport reuses it on retry. The idempotency digest includes argv: retry with the same verb, since reusing a key across `task accept` and its `task deliver` alias conflicts.
 - **`--if-revision <n>`** is an optional optimistic check on mutations of an existing task.
 - **Sizes are bounded** per field. Oversize input is refused, never truncated.
+- **PR publication controls:** `task accept <task>` and its `task deliver` alias accept `--title <text>`, `--body <text|->` and `--draft[=false]` only for code in `pull_request` landing mode. The title is nonempty and at most 200 bytes; the body is at most 64 KiB and can be empty. Only one text field may read stdin. Direct-mode and non-code uses refuse these flags. Omitted fields preserve the existing PR publication defaults. A repeated accept with the same idempotency key returns the saved result; a new key reuses an open PR only when any explicit metadata agrees with it, without editing existing metadata.
 
 Over SSH, the client sends one JSON object in the SSH command: `{"v":1,"argv":[...],"key":"...","run_token":"..."}`, with stdin piped through unchanged. Nothing is shell-parsed on the home side.
 
