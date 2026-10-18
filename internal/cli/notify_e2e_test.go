@@ -96,14 +96,15 @@ func TestSubDriverLoopEndsInTheMainDriversInbox(t *testing.T) {
 	})
 	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Build the feature")
 	env.OK("task", "start", "t_1")
-	env.WaitState("t_2", "done")
-	env.WaitState("t_3", "done")
+	observe := subDriverDiagnostic(t, env)
+	env.WaitState("t_2", "done", observe)
+	env.WaitState("t_3", "done", observe)
 	if errs := commandErrors(env, "t_1"); len(errs) != 0 {
 		t.Fatalf("sub-driver commands failed: %v", errs)
 	}
 
 	env.StartDaemon()
-	env.WaitState("t_1", "done")
+	env.WaitState("t_1", "done", observe)
 	second := callsFor(env, "t_1", 1)
 	if len(second) != 1 || !strings.Contains(second[0]["brief"].(string), "Part one built") || !strings.Contains(second[0]["brief"].(string), "Part two built") {
 		t.Fatalf("continuation brief: %v", second)

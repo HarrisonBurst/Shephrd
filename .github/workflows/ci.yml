@@ -28,6 +28,17 @@ jobs:
           node-version: '24'
       - run: make test-docs
       - run: make test
+        env:
+          SHEPHRD_TEST_DIAGNOSTICS: ${{ github.event_name == 'pull_request' && format('{0}/shephrd-subdriver-diagnostic', runner.temp) || '' }}
+      - if: ${{ failure() && github.event_name == 'pull_request' && matrix.os == 'ubuntu-24.04' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: subdriver-pull-request-ubuntu-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/shephrd-subdriver-diagnostic/store.sqlite
+            ${{ runner.temp }}/shephrd-subdriver-diagnostic/events.jsonl
+            ${{ runner.temp }}/shephrd-subdriver-diagnostic/wake-trace.jsonl
       - run: make test-extension
       - run: go vet ./...
       - run: git diff --check

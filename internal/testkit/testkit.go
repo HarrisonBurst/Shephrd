@@ -279,14 +279,20 @@ func (e *Env) Calls() []map[string]any {
 }
 
 // Eventually polls until cond holds, failing the test after a timeout.
-func (e *Env) Eventually(what string, cond func() bool) {
+func (e *Env) Eventually(what string, cond func() bool, observe ...func(bool)) {
 	e.t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
 		}
+		if len(observe) != 0 {
+			observe[0](false)
+		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	if len(observe) != 0 {
+		observe[0](true)
 	}
 	var summary []string
 	for _, call := range e.Calls() {
@@ -305,7 +311,7 @@ func (e *Env) Task(ref string, as ...string) map[string]any {
 }
 
 // WaitState waits until a task reaches a state, and its run has exited.
-func (e *Env) WaitState(ref, state string) map[string]any {
+func (e *Env) WaitState(ref, state string, observe ...func(bool)) map[string]any {
 	e.t.Helper()
 	var task map[string]any
 	e.Eventually(ref+" "+state, func() bool {
@@ -324,7 +330,7 @@ func (e *Env) WaitState(ref, state string) map[string]any {
 		}
 		run := log.JSON(e.t)["run"].(map[string]any)
 		return run["liveness"] == "exited"
-	})
+	}, observe...)
 	return task
 }
 
