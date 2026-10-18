@@ -37,14 +37,8 @@ func (id Identity) Probe() string {
 	return "live"
 }
 
-// GroupAlive reports whether any process remains in the group.
-func GroupAlive(pgid int) bool {
-	err := syscall.Kill(-pgid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
 // StopGroup terminates a process group, then kills it after the grace
-// period. It reports true only once no process remains in the group.
+// period. It reports true only once no live process remains in the group.
 func StopGroup(pgid int, grace time.Duration) bool {
 	if pgid <= 1 {
 		return false
