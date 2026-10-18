@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"shephrd/internal/testkit"
 )
@@ -261,6 +262,7 @@ func TestSubDriverLandsWithADelegatedGrant(t *testing.T) {
 func TestSubDriverAcceptsChildrenBeforeParent(t *testing.T) {
 	env, repo := withHarness(t)
 	env.AppendConfig("[timeouts]\nsettle = \"300ms\"")
+	observe := subDriverDiagnostic(t, env, 300*time.Millisecond)
 	env.Script(map[string][][]action{"t_1": {
 		{
 			{"shephrd": []string{"task", "create", "--repo", "api", "--objective", "Research", "--deliverable", "report"}},
@@ -280,10 +282,10 @@ func TestSubDriverAcceptsChildrenBeforeParent(t *testing.T) {
 	}})
 	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")
 	env.OK("task", "start", "t_1")
-	env.WaitState("t_2", "done")
-	env.WaitState("t_3", "done")
+	env.WaitState("t_2", "done", observe)
+	env.WaitState("t_3", "done", observe)
 	env.StartDaemon()
-	env.WaitState("t_1", "done")
+	env.WaitState("t_1", "done", observe)
 	env.Refused("open_children", "task", "accept", "t_1")
 	env.Refused("not_owner", "task", "accept", "t_2")
 	env.Refused("not_owner", "task", "accept", "t_3")
@@ -295,8 +297,8 @@ func TestSubDriverAcceptsChildrenBeforeParent(t *testing.T) {
 	env.OK("task", "send", "t_1", "Review and close your children")
 	env.Eventually("sub-driver to accept both children", func() bool {
 		return env.Task("t_2")["state"] == "closed" && env.Task("t_3")["state"] == "closed"
-	})
-	env.WaitState("t_1", "done")
+	}, observe)
+	env.WaitState("t_1", "done", observe)
 	if errs := commandErrors(env, "t_1"); len(errs) != 1 || !strings.Contains(errs[0], `"kind":"invalid_state"`) {
 		t.Fatalf("unexpected repeat acceptance response: %v", errs)
 	}

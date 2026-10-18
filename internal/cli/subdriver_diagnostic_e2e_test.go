@@ -17,14 +17,17 @@ type wakeObservation struct {
 	Time         string `json:"time"`
 	State        string `json:"state,omitempty"`
 	WakeAt       string `json:"wake_at,omitempty"`
+	RunID        int64  `json:"run_id,omitempty"`
+	RunPurpose   string `json:"run_purpose,omitempty"`
 	RunLiveness  string `json:"run_liveness,omitempty"`
+	StopReason   string `json:"stop_reason,omitempty"`
 	TurnReported bool   `json:"turn_reported"`
 	Eligibility  string `json:"eligibility,omitempty"`
 	WokenEvents  int    `json:"woken_events"`
 	Error        string `json:"error,omitempty"`
 }
 
-func subDriverDiagnostic(t *testing.T, env *testkit.Env) func(bool) {
+func subDriverDiagnostic(t *testing.T, env *testkit.Env, settle time.Duration) func(bool) {
 	t.Helper()
 	store := filepath.Join(env.Home, ".local", "state", "shephrd", "shephrd.db")
 	db, err := sql.Open("sqlite", "file:"+store+"?mode=ro")
@@ -39,9 +42,11 @@ func subDriverDiagnostic(t *testing.T, env *testkit.Env) func(bool) {
 			obs := wakeObservation{Time: at.Format(time.RFC3339Nano)}
 			var wake, liveness sql.NullString
 			var reported int
-			err := db.QueryRow(`SELECT t.state, t.wake_at, r.liveness, COALESCE(r.turn_reported, 0),
+			err := db.QueryRow(`SELECT t.state, t.wake_at, COALESCE(r.id, 0), COALESCE(r.purpose, ''), r.liveness,
+				COALESCE(r.stop_reason, ''), COALESCE(r.turn_reported, 0),
 				(SELECT count(*) FROM events WHERE task = t.id AND name = 'turn.woken')
-				FROM tasks t LEFT JOIN runs r ON r.id = t.run WHERE t.id = 1`).Scan(&obs.State, &wake, &liveness, &reported, &obs.WokenEvents)
+				FROM tasks t LEFT JOIN runs r ON r.id = t.run WHERE t.id = 1`).Scan(
+				&obs.State, &wake, &obs.RunID, &obs.RunPurpose, &liveness, &obs.StopReason, &reported, &obs.WokenEvents)
 			if err != nil {
 				obs.Error = err.Error()
 			} else {
@@ -51,7 +56,7 @@ func subDriverDiagnostic(t *testing.T, env *testkit.Env) func(bool) {
 					obs.Eligibility = "state_not_wakeable"
 				case !wake.Valid:
 					obs.Eligibility = "no_pending_wake"
-				case wake.String > at.Add(-500*time.Millisecond).Format("2006-01-02T15:04:05.000000000Z"):
+				case wake.String > at.Add(-settle).Format("2006-01-02T15:04:05.000000000Z"):
 					obs.Eligibility = "settling"
 				case liveness.Valid && liveness.String != "exited":
 					obs.Eligibility = "run_not_exited"
@@ -59,13 +64,20 @@ func subDriverDiagnostic(t *testing.T, env *testkit.Env) func(bool) {
 					obs.Eligibility = "wake_query_candidate"
 				}
 			}
-			trace = append(trace, obs)
+			if len(trace) == 256 {
+				copy(trace, trace[1:])
+				trace[len(trace)-1] = obs
+			} else {
+				trace = append(trace, obs)
+			}
 			return
 		}
-		dir := os.Getenv("SHEPHRD_TEST_DIAGNOSTICS")
-		if dir == "" {
-			dir, err = os.MkdirTemp("", "shephrd-subdriver-diagnostic-")
-		} else {
+		root := os.Getenv("SHEPHRD_TEST_DIAGNOSTICS")
+		if root == "" {
+			root, err = os.MkdirTemp("", "shephrd-subdriver-diagnostic-")
+		}
+		dir := filepath.Join(root, t.Name())
+		if err == nil {
 			err = os.MkdirAll(dir, 0o700)
 		}
 		if err == nil {
@@ -92,9 +104,9 @@ func saveSubDriverDiagnostic(db *sql.DB, dir string, trace []wakeObservation, da
 	if err != nil {
 		return err
 	}
+	encoder := json.NewEncoder(events)
 	rows, err := snapshot.Query(`SELECT seq, time, name, COALESCE(task, 0), COALESCE(attempt, 0), COALESCE(run, 0) FROM events ORDER BY seq`)
 	if err == nil {
-		encoder := json.NewEncoder(events)
 		for rows.Next() {
 			var seq int
 			var at, name string
@@ -102,7 +114,7 @@ func saveSubDriverDiagnostic(db *sql.DB, dir string, trace []wakeObservation, da
 			if err = rows.Scan(&seq, &at, &name, &task, &attempt, &run); err != nil {
 				break
 			}
-			err = encoder.Encode(map[string]any{"seq": seq, "time": at, "name": name, "task": task, "attempt": attempt, "run": run})
+			err = encoder.Encode(map[string]any{"kind": "event", "seq": seq, "time": at, "name": name, "task": task, "attempt": attempt, "run": run})
 			if err != nil {
 				break
 			}
@@ -111,6 +123,47 @@ func saveSubDriverDiagnostic(db *sql.DB, dir string, trace []wakeObservation, da
 			err = rows.Err()
 		}
 		rows.Close()
+	}
+	if err == nil {
+		rows, err = snapshot.Query(`SELECT id, state, reason, COALESCE(wake_at, ''), COALESCE(run, 0) FROM tasks ORDER BY id`)
+		if err == nil {
+			for rows.Next() {
+				var id, run int64
+				var state, reason, wakeAt string
+				if err = rows.Scan(&id, &state, &reason, &wakeAt, &run); err != nil {
+					break
+				}
+				err = encoder.Encode(map[string]any{"kind": "task", "id": id, "state": state, "reason": reason, "wake_at": wakeAt, "run": run})
+				if err != nil {
+					break
+				}
+			}
+			if err == nil {
+				err = rows.Err()
+			}
+			rows.Close()
+		}
+	}
+	if err == nil {
+		rows, err = snapshot.Query(`SELECT id, task, generation, purpose, liveness, turn_reported, stop_reason FROM runs ORDER BY id`)
+		if err == nil {
+			for rows.Next() {
+				var id, task, generation int64
+				var purpose, liveness, stopReason string
+				var reported bool
+				if err = rows.Scan(&id, &task, &generation, &purpose, &liveness, &reported, &stopReason); err != nil {
+					break
+				}
+				err = encoder.Encode(map[string]any{"kind": "run", "id": id, "task": task, "generation": generation, "purpose": purpose, "liveness": liveness, "turn_reported": reported, "stop_reason": stopReason})
+				if err != nil {
+					break
+				}
+			}
+			if err == nil {
+				err = rows.Err()
+			}
+			rows.Close()
+		}
 	}
 	closeErr := events.Close()
 	if err != nil {
@@ -123,16 +176,21 @@ func saveSubDriverDiagnostic(db *sql.DB, dir string, trace []wakeObservation, da
 	if err != nil {
 		return err
 	}
-	encoder := json.NewEncoder(wakeTrace)
+	encoder = json.NewEncoder(wakeTrace)
 	for _, obs := range trace {
 		if err = encoder.Encode(obs); err != nil {
 			break
 		}
 	}
 	if err == nil {
+		count := 0
 		for _, line := range strings.Split(daemonLog, "\n") {
 			if strings.Contains(line, "continue t_1") || strings.Contains(line, "wakes:") {
 				if err = encoder.Encode(map[string]string{"daemon_error": line}); err != nil {
+					break
+				}
+				count++
+				if count == 256 {
 					break
 				}
 			}

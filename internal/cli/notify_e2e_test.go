@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"shephrd/internal/notify"
 	"shephrd/internal/testkit"
@@ -96,7 +97,7 @@ func TestSubDriverLoopEndsInTheMainDriversInbox(t *testing.T) {
 	})
 	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Build the feature")
 	env.OK("task", "start", "t_1")
-	observe := subDriverDiagnostic(t, env)
+	observe := subDriverDiagnostic(t, env, 500*time.Millisecond)
 	env.WaitState("t_2", "done", observe)
 	env.WaitState("t_3", "done", observe)
 	if errs := commandErrors(env, "t_1"); len(errs) != 0 {
