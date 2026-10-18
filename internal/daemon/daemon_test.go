@@ -11,8 +11,95 @@ import (
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
 	"shephrd/internal/execution"
+	"shephrd/internal/plugin"
 	"shephrd/internal/store"
 )
+
+func TestReportedWorkerDoesNotRewakeForEarlierMessage(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "shephrd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	var task *coord.Task
+	err = db.Write(ctx, func(tx *store.Tx) error {
+		if _, err := coord.AddRepo(tx, "operator", coord.Repo{Name: "api", Host: "workhorse", Path: "/src/api", DefaultBranch: "main"}); err != nil {
+			return err
+		}
+		proposal, err := coord.Propose(tx, &config.Config{Host: "workhorse", MaxDepth: 3}, coord.Caller{Kind: "driver", Name: "main"}, coord.NewTask{Repo: "api", Objective: "Build"})
+		if err != nil {
+			return err
+		}
+		task, err = coord.Create(tx, coord.Caller{Kind: "driver", Name: "main"}, proposal, config.Target{Host: "workhorse", Harness: "codex"})
+		if err != nil {
+			return err
+		}
+		attempt, err := coord.AllocateAttempt(tx, task, task.Target, func(int64) (string, string) { return t.TempDir(), "shephrd/t_1/1" }, 0)
+		if err != nil {
+			return err
+		}
+		if err := coord.SetWorkspaceState(tx, "system", attempt, "held", "base"); err != nil {
+			return err
+		}
+		if err := coord.AdoptAttempt(tx, "system", task, attempt); err != nil {
+			return err
+		}
+		run, _, err := coord.BeginRun(tx, "system", task, "start", func(int64) string { return t.TempDir() })
+		if err != nil {
+			return err
+		}
+		if err := coord.MarkLive(tx, run, 123, "start", "", "codex", ""); err != nil {
+			return err
+		}
+		if _, err := coord.Send(tx, coord.Caller{Kind: "driver", Name: "main"}, task, "Update the implementation", 0); err != nil {
+			return err
+		}
+		caller := coord.Caller{Kind: "run", Task: task.ID, Attempt: 1, Run: run.ID}
+		if _, err := coord.RecordReport(tx, caller, task, &coord.Report{Kind: "result", Body: "Built with update"}); err != nil {
+			return err
+		}
+		return coord.RecordExit(tx, run, 143, "session")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	x := &execution.Executor{DB: db, Host: func(string) (execution.Host, error) {
+		calls++
+		return nil, fmt.Errorf("unexpected continuation")
+	}}
+	d := &Daemon{db: db, Log: io.Discard}
+	cfg := &config.Config{Timeouts: config.Timeouts{Settle: config.Duration{Duration: 0}}}
+	reg := plugin.Load(cfg, nil)
+	if err := d.wake(ctx, x, reg, cfg); err != nil {
+		t.Fatal(err)
+	}
+	var woken int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE task = ? AND name = 'turn.woken'`, task.ID).Scan(&woken); err != nil {
+		t.Fatal(err)
+	}
+	current, err := coord.Load(db, task.ID)
+	if err != nil || woken != 0 || calls != 0 || current.State != "done" {
+		t.Fatalf("after reported exit: task=%+v, wakes=%d, host calls=%d, err=%v", current, woken, calls, err)
+	}
+	if err := db.Write(ctx, func(tx *store.Tx) error {
+		current, err := coord.Load(tx, task.ID)
+		if err != nil {
+			return err
+		}
+		_, err = coord.Send(tx, coord.Caller{Kind: "driver", Name: "main"}, current, "New request", 0)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.wake(ctx, x, reg, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE task = ? AND name = 'turn.woken'`, task.ID).Scan(&woken); err != nil || woken != 1 || calls != 1 {
+		t.Fatalf("new message: wakes=%d, host calls=%d, err=%v", woken, calls, err)
+	}
+}
 
 type reportedDriverHost struct {
 	calls        []string
