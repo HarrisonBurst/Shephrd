@@ -58,14 +58,18 @@ func ReportTarget(q Querier, c Caller, r *Report) (*Task, error) {
 		return nil, err
 	}
 	var open []int64
+	known := false
 	for _, req := range requests {
 		if req.State != "answered" {
 			open = append(open, req.Seq)
 		}
+		if req.Seq == r.Request {
+			known = true
+		}
 	}
 	switch {
-	case r.Request != 0 && !slices.Contains(open, r.Request):
-		return nil, fault.New("invalid_request", "%d is not an open request on %s", r.Request, t.Ref)
+	case r.Request != 0 && !known:
+		return nil, fault.New("invalid_request", "%d is not a request on %s", r.Request, t.Ref)
 	case r.Request == 0 && len(open) == 1:
 		r.Request = open[0]
 	case r.Request == 0:
@@ -123,7 +127,7 @@ func RecordReport(tx *store.Tx, c Caller, t *Task, r *Report) (int64, error) {
 		}
 		return seq, WakeOwner(tx, t, seq)
 	case t.Role == "driver" && r.Kind == "question":
-		if _, err := tx.Exec(`UPDATE requests SET state = 'asked' WHERE task = ? AND seq = ?`, t.ID, r.Request); err != nil {
+		if _, err := tx.Exec(`UPDATE requests SET state = 'asked', result = NULL WHERE task = ? AND seq = ?`, t.ID, r.Request); err != nil {
 			return 0, err
 		}
 		return seq, WakeOwner(tx, t, seq)

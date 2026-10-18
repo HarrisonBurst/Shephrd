@@ -23,7 +23,7 @@ A session reports by running `shephrd report`, with its run token from the envir
 | `report note <text>` | `note` | Inert. A driver's checkpoint note. |
 
 - Text comes from an argument or stdin. Bodies are bounded at 8 KiB, and notes at 4 KiB; longer material belongs in the deliverable itself.
-- A driver run adds `--request <seq>` to a question or result, naming the request it answers. A worker needs none.
+- A driver run may omit `--request <seq>` for a question or result only when exactly one request is open. To follow up on an answered request on its own task, it must name that request explicitly; zero open requests never select a historical request implicitly. A worker needs none.
 - Every report takes a `--key`, so a retried report never duplicates.
 
 ### What ends a turn
@@ -53,7 +53,7 @@ Where the wake goes depends on who the owner is:
 - **A driver task owner**, meaning a sub-driver, gets a continuation turn. The event appears in that turn's brief.
 - **A driver**, such as the main driver or a plugin, gets an **inbox item**.
 
-Because owners are fixed by the tree, a main driver only ever hears from its direct children. A worker's question reaches its sub-driver, which answers it or asks its own owner.
+Because owners are fixed by the tree, a main driver only ever hears from its direct children. A worker's question reaches its sub-driver, which answers it or asks its own owner. An explicit question on an answered driver request sends a new `task.question` item, with that request's sequence and `next.reply`, to its direct owner. The owner's `task send --reply-to <question seq>` reopens the request; an explicit revised result sends a distinct `task.result` item. Neither makes progress or notes visible in the inbox or accepts the work.
 
 Going down, `task send <task> <text> [--reply-to <seq>]` records a `message`, or a `reply` when it answers a question. It wakes the task for a continuation turn. A message to a driver task is a new request.
 

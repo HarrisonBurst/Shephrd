@@ -99,7 +99,7 @@ A sub-driver coordinates one repository, or general work for a general sub-drive
   - Explicitly review and accept its own report and answer children without a grant. For code children, verify a merge before closure or invoke `task accept` to land only with a `land` grant; publishing a pull request leaves the child open until proven merged. A parent result is evidence, not child closure. Keep active or waiting children under supervision, escalating questions upstream as needed. Obsolete unmerged code stays open unless proven merged or individually approved for discard. Never auto-close a child as superseded.
   - Do not ask the main driver to accept a grandchild: the main driver accepts only this sub-driver's parent task after all its children close.
 - **Handle `dependency.changed`** by telling the affected worker to rebase.
-- **Return per request.** Report a result with a summary as soon as a request is finished. Its workers' artifacts are attached automatically.
+- **Return per request.** Report a result with a summary as soon as a request is finished. Its workers' artifacts are attached automatically. If a child later needs a decision or the answer needs revision, use `report question|result --request <seq>` to follow up explicitly on the answered request that child serves, then respond to the owner's reply. With no open request, omitting `--request` is refused; do not attribute unrelated work to a historical request or assume a follow-up accepts or closes a child.
 - **Nested sub-drivers** use this same skill. A sub-driver that delegates to another sub-driver supervises it as it would a worker.
 
 ## Worker

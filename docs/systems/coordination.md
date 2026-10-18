@@ -66,7 +66,8 @@ A sub-driver is a `driver` task. There are no separate sub-driver records or com
 
 - **Every `message` to a driver task is a request.** Creating a driver task makes its objective the first request, and the owner adds more by sending messages, which is how one sub-driver is reused for several pieces of work.
 - **Children belong to a request.** A child created by a driver run records the request it serves: the only open one, or the one named with `--request` when several are open.
-- **Results answer requests.** A driver run reports a `result` or `question` for one request, referencing it, whenever that request is ready. One request's result never waits on another's work.
+- **Results answer requests.** A driver run reports a `result` or `question` for one request, referencing it, whenever that request is ready. One request's result never waits on another's work. With a single open request it may omit `--request`; with no open request it must name an answered request on its own task explicitly with `--request <seq>` for a follow-up question or revised result. An unknown, foreign or closed task's request is never eligible.
+- **Follow-ups keep history.** A follow-up question makes the named answered request `asked` and clears its current result; the owner's reply reopens that request. A revised result replaces only that request's current answer with a newly sealed artifact. Earlier result events and sealed artifacts remain historical evidence, not the current answer. Neither path accepts a task or its children, lands, discards or grants authority.
 - **Results carry evidence of their children.** Coordination attaches the current state of the request's children to each result, so the owner sees anything still running or awaiting landing. That state is evidence; it requires nothing.
 
 ### Dependencies
@@ -134,7 +135,7 @@ stateDiagram-v2
 - `running`: a current run exists or is being started.
 - `waiting`: the run asked a question that its owner has not answered.
 - `held`: stopped, failed, blocked or lost. The reason says which, and the attempt keeps its workspace.
-- `done`: a valid result has been recorded. For a worker task, its result moves the task to `done`. For a driver task, each result answers its named request; the task becomes `done` only after every request it has received is answered and the reported turn settles. This is not owner acceptance, landing or release. A message to a done task reopens it, and the earlier result stays in the log but no longer counts as current until the next valid result.
+- `done`: a valid result has been recorded. For a worker task, its result moves the task to `done`. For a driver task, each result answers its named request; the task becomes `done` only after every request it has received is answered and the reported turn settles. This is not owner acceptance, landing or release. A message to a done task reopens it, and the earlier result stays in the log but no longer counts as current until the next valid result. A running continuation may explicitly follow up on an answered request without a new message; a question clears its current answer until a new result is reported.
 - `closed`: nothing further will happen, with reason `accepted`, `discarded` or `cancelled`. Historical `delivered` reasons are also valid and remain readable without rewriting stored state or event history. Closing as accepted or discarded is decided by artifacts and authority.
 
 When a run's host is unreachable, the task keeps its state and its liveness is `unknown`. Any transition that needs the run to be gone, such as resume or retry, is refused until liveness is known.
