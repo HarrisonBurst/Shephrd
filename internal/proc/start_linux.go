@@ -4,27 +4,40 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
 func startTime(pid int) (string, error) {
-	body, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if errors.Is(err, os.ErrNotExist) {
-		return "", errNoProcess
-	}
+	state, _, start, err := linuxStat(pid)
 	if err != nil {
 		return "", err
 	}
+	if state == "Z" || state == "X" {
+		return "", errNoProcess
+	}
+	return start, nil
+}
+
+func linuxStat(pid int) (string, int, string, error) {
+	body, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", 0, "", errNoProcess
+	}
+	if err != nil {
+		return "", 0, "", err
+	}
 	end := strings.LastIndexByte(string(body), ')')
 	if end < 0 {
-		return "", fmt.Errorf("unreadable /proc/%d/stat", pid)
+		return "", 0, "", fmt.Errorf("unreadable /proc/%d/stat", pid)
 	}
 	fields := strings.Fields(string(body)[end+1:])
 	if len(fields) < 20 {
-		return "", fmt.Errorf("unreadable /proc/%d/stat", pid)
+		return "", 0, "", fmt.Errorf("unreadable /proc/%d/stat", pid)
 	}
-	if fields[0] == "Z" || fields[0] == "X" {
-		return "", errNoProcess
+	group, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return "", 0, "", fmt.Errorf("unreadable /proc/%d/stat: %w", pid, err)
 	}
-	return fields[19], nil
+	return fields[0], group, fields[19], nil
 }
