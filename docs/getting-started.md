@@ -10,7 +10,7 @@ This guide sets Shephrd up on one machine, then across three. The [system design
 shephrd init
 ```
 
-This writes `~/.config/shephrd/config.toml`, creates the store, and makes this machine the home host. The configuration names your main driver `main` and grants it `land` and `discard`, so it can accept and land code in its own trees; discarding still needs explicit per-action user approval.
+This writes `~/.config/shephrd/config.toml`, creates the store, and makes this machine the home host. Set `cli_path` in that file to an absolute, stable installed Shephrd executable before starting runs or plugins. For example, on m4 use `cli_path = "/etc/profiles/per-user/harrison/bin/shephrd"`; on Fedora workhorse use `cli_path = "/home/harhsieh/.nix-profile/bin/shephrd"`. Do not use a Nix store path or copy the other host's value. The path must exist, be executable and initially match the host binary's release. The configuration names your main driver `main` and grants it `land` and `discard`, so it can accept and land code in its own trees; discarding still needs explicit per-action user approval.
 
 Choose a default harness and model:
 
@@ -55,7 +55,7 @@ merge = "external"         # someone merges on GitHub; shephrd task verify prove
 shephrd daemon
 ```
 
-The daemon wakes sub-drivers when their workers report, starts continuation turns, stops inactive runs, pushes inbox items and delivers plugin events. Run it whenever Shephrd is in use, as a launchd agent on macOS or a systemd user service on Linux with lingering enabled, so it outlives your login. Give the service a `PATH` that reaches `git` and your harnesses. Without it every command warns `daemon_not_running`.
+The daemon wakes sub-drivers when their workers report, starts continuation turns, stops inactive runs, pushes inbox items and delivers plugin events. Run it whenever Shephrd is in use, as a launchd agent on macOS or a systemd user service on Linux with lingering enabled, so it outlives your login. Give the service a `PATH` that reaches `git` and your harnesses. Without it every command warns `daemon_not_running`. On upgrade, install the matching release on home, client and worker hosts, restart the daemon from the activated installed path (including a hand-started Fedora daemon), and update any pinned SSH forced commands. Only then allow the new binary to migrate the store. Existing supervisors stay on their original binaries; their briefs, harness commands, private turn lookups and plugin callbacks use the installed path for new execs. Keep the old binaries available until those runs finish: do not garbage collect their store paths. A baseline release with this configuration must be installed before a later schema-changing upgrade; it cannot repair a brief or `run.json` created by an earlier release.
 
 ### Install the main driver's skill
 
@@ -96,7 +96,7 @@ The [command spec's example](systems/commands.md#example-three-machines):
 | `hermes` | Client host: the main driver |
 | `laptop` | Worker host: extra sessions for `workhorse` |
 
-On **workhorse**, initialize as above, then declare the worker host:
+On **workhorse**, initialize as above and set its own `cli_path`, then declare the worker host:
 
 ```toml
 [hosts.laptop]
@@ -124,10 +124,10 @@ On **laptop**:
 shephrd init --host laptop --home me@workhorse
 ```
 
-and in laptop's `authorized_keys`, pin workhorse's key to the agent:
+Set laptop's own `cli_path` to its installed binary before running sessions, and in laptop's `authorized_keys`, pin workhorse's key to the agent:
 
 ```text
-command="shephrd agent",restrict ssh-ed25519 AAAA... workhorse
+command="/absolute/path/to/laptop/installed/bin/shephrd agent",restrict ssh-ed25519 AAAA... workhorse
 ```
 
 Register a repository that lives on the laptop from workhorse with `shephrd repo add --host laptop /path/on/laptop`. Its sessions run on the laptop and report back through workhorse. If the laptop sleeps, its runs become `unknown` and nothing that needs them gone proceeds until it returns. All three machines must run the same Shephrd release.

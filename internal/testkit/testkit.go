@@ -93,11 +93,12 @@ func Git(t testing.TB, dir string, args ...string) string {
 }
 
 type Env struct {
-	t    testing.TB
-	Bin  string
-	Home string
-	Vars map[string]string
-	Path []string
+	t         testing.TB
+	Bin       string
+	Installed string
+	Home      string
+	Vars      map[string]string
+	Path      []string
 }
 
 func NewEnv(t testing.TB) *Env {
@@ -107,7 +108,14 @@ func NewEnv(t testing.TB) *Env {
 		t.Fatal(err)
 	}
 	e := &Env{t: t, Bin: Binary(t), Home: home, Vars: map[string]string{}}
-	e.Path = []string{filepath.Dir(e.Bin)}
+	e.Installed = filepath.Join(home, "profile", "bin", "shephrd")
+	if err := os.MkdirAll(filepath.Dir(e.Installed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(e.Bin, e.Installed); err != nil {
+		t.Fatal(err)
+	}
+	e.Path = []string{filepath.Dir(e.Installed)}
 	t.Cleanup(e.killRuns)
 	return e
 }
@@ -408,6 +416,17 @@ func WritePlugin(t testing.TB, dir, name, manifest string) {
 	head := "name = \"" + name + "\"\nversion = \"1.0.0\"\nprotocol = 1\nexec = [\"bin/fake\"]\n"
 	if err := os.WriteFile(filepath.Join(dir, "plugin.toml"), []byte(head+manifest), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func (e *Env) SetCLIPath() {
+	e.t.Helper()
+	body, err := os.ReadFile(e.ConfigPath())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(e.ConfigPath(), append([]byte("cli_path = \""+e.Installed+"\"\n"), body...), 0o600); err != nil {
+		e.t.Fatal(err)
 	}
 }
 

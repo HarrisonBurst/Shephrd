@@ -17,6 +17,11 @@ import (
 // that runs each pane's command like a terminal would.
 func withHerdr(t *testing.T) *testkit.Env {
 	env, _ := withHarness(t)
+	installHerdr(t, env)
+	return env
+}
+
+func installHerdr(t *testing.T, env *testkit.Env) {
 	fake, _ := os.ReadFile(testkit.Tool(t, "./internal/testkit/fakeherdr", "fakeherdr"))
 	bin := filepath.Join(env.Home, "herdrbin")
 	os.MkdirAll(bin, 0o755)
@@ -40,7 +45,6 @@ package = "firstparty"
 [plugins.herdr.options]
 socket = "/tmp/herdr.sock"
 workspace = "w1"`)
-	return env
 }
 
 func herdrPanes(env *testkit.Env) []map[string]any {

@@ -32,6 +32,7 @@ type HostEnv struct {
 	DataDir      string
 	Config       string
 	Self         string
+	CLIPath      string
 	Path         string
 	Home         string
 	Account      []string
@@ -62,8 +63,27 @@ func LocalEnv(cfg *config.Config, getenv config.Getenv) (HostEnv, error) {
 	if err != nil {
 		return HostEnv{}, err
 	}
-	return HostEnv{Host: cfg.Host, DataDir: cfg.DataDir, Config: cfg.Path, Self: self, Path: getenv("PATH"), Home: getenv("HOME"), Account: config.Account(getenv),
+	return HostEnv{Host: cfg.Host, DataDir: cfg.DataDir, Config: cfg.Path, Self: self, CLIPath: cfg.CLIPath, Path: getenv("PATH"), Home: getenv("HOME"), Account: config.Account(getenv),
 		Presentation: cfg.Presentation, Getenv: getenv}, nil
+}
+
+func (e HostEnv) installedCLI() error {
+	cfg := config.Config{Path: e.Config, CLIPath: e.CLIPath}
+	path, err := cfg.InstalledCLI()
+	if err != nil {
+		return err
+	}
+	out, err := exec.Command(path, "version").Output()
+	if err != nil {
+		return fault.New("invalid_config", "%s: cli_path %s cannot report its release: %v", e.Config, path, err)
+	}
+	var installed struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(out, &installed) != nil || installed.Version != version.String() {
+		return fault.New("version_mismatch", "host %s runs %s, cli_path %s reports %q", e.Host, version.String(), path, installed.Version)
+	}
+	return nil
 }
 
 type Local struct {

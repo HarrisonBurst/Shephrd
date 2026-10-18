@@ -181,7 +181,7 @@ Every call starts the plugin executable, writes one JSON request to stdin and re
 ```
 
 - Every call has a timeout and a response size limit. Intercept hooks default to 5 seconds, and each provider type sets its own.
-- The plugin receives a clean environment: `PATH` with this Shephrd's directory first, `HOME`, the OS account's `USER`, `LOGNAME` and `TMPDIR`, `SHEPHRD_PLUGIN`, `SHEPHRD_CONFIG` and, when it may call back, `SHEPHRD_CALL_TOKEN`. Shephrd identity variables from the parent, such as a run token, are never passed through. It runs in its plugin directory, and its stderr is appended to its log, which `plugin status` names.
+- The plugin receives a clean environment: `PATH` with this host's configured absolute stable installed `cli_path` directory first, `HOME`, the OS account's `USER`, `LOGNAME` and `TMPDIR`, `SHEPHRD_PLUGIN`, `SHEPHRD_CONFIG` and, when it may call back, `SHEPHRD_CALL_TOKEN`. The path must be present and executable or the call fails closed; no old invoking binary directory replaces it. Plugin callbacks resolve the installed executable on each new exec after activation, even if their caller began under an older binary. Shephrd identity variables from the parent, such as a run token, are never passed through. It runs in its plugin directory, and its stderr is appended to its log, which `plugin status` names.
 - The response depends on the call's kind:
 
   | Kind | Response |

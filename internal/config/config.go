@@ -18,6 +18,7 @@ import (
 type Config struct {
 	Path         string                  `toml:"-"`
 	Host         string                  `toml:"host"`
+	CLIPath      string                  `toml:"cli_path"`
 	Home         string                  `toml:"home"`
 	Presentation string                  `toml:"presentation"`
 	Hosts        map[string]HostConfig   `toml:"hosts"`
@@ -179,6 +180,9 @@ func Load(getenv Getenv) (Config, error) {
 }
 
 func (c *Config) resolve(getenv Getenv) error {
+	if c.CLIPath != "" && !filepath.IsAbs(c.CLIPath) {
+		return fault.New("invalid_config", "%s: cli_path %q must be absolute", c.Path, c.CLIPath)
+	}
 	if c.Host != "" || c.Home == "" {
 		if !NamePattern.MatchString(c.Host) {
 			return fault.New("invalid_config", "%s: host %q must match %s", c.Path, c.Host, NamePattern)
@@ -328,6 +332,20 @@ func Write(path, host, driver, home string) error {
 		return fmt.Errorf("write configuration: %w", err)
 	}
 	return file.Close()
+}
+
+func (c *Config) InstalledCLI() (string, error) {
+	if c.CLIPath == "" {
+		return "", fault.New("invalid_config", "%s: cli_path must name an absolute installed Shephrd executable", c.Path)
+	}
+	info, err := os.Stat(c.CLIPath)
+	if err != nil {
+		return "", fault.New("invalid_config", "%s: cli_path %s: %v", c.Path, c.CLIPath, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", fault.New("invalid_config", "%s: cli_path %s is not executable", c.Path, c.CLIPath)
+	}
+	return c.CLIPath, nil
 }
 
 func xdgDir(getenv Getenv, name, fallback string) (string, error) {

@@ -68,11 +68,11 @@ func TestWorkerRunsInItsOwnWorkspaceAndReports(t *testing.T) {
 	}
 	call := calls[0]
 	if call["harness"] != "codex" || call["cwd"] != attempt["workspace"] || !strings.Contains(call["brief"].(string), "Fix the bug") ||
-		!strings.Contains(call["brief"].(string), "Run Shephrd as `"+env.Bin+"`") {
+		!strings.Contains(call["brief"].(string), "Run Shephrd as `"+env.Installed+"`") {
 		t.Fatalf("harness call: %v", call)
 	}
 	vars := envOf(call)
-	if !strings.HasPrefix(vars["PATH"], filepath.Dir(env.Bin)+":") {
+	if !strings.HasPrefix(vars["PATH"], filepath.Dir(env.Installed)+":") {
 		t.Fatalf("the session's PATH does not start with Shephrd's directory: %s", vars["PATH"])
 	}
 	for _, key := range []string{"PATH", "HOME", "USER", "SHEPHRD_CONFIG", "SHEPHRD_RUN_TOKEN"} {

@@ -25,6 +25,7 @@ type action struct {
 	Write   map[string]string `json:"write"`
 	Git     []string          `json:"git"`
 	Sleep   string            `json:"sleep"`
+	Wait    string            `json:"wait"`
 	Exit    *int              `json:"exit"`
 }
 
@@ -119,6 +120,13 @@ func main() {
 		case a.Sleep != "":
 			d, _ := time.ParseDuration(a.Sleep)
 			time.Sleep(d)
+		case a.Wait != "":
+			for {
+				if _, err := os.Stat(filepath.Join(dir, a.Wait)); err == nil {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
 		case a.Exit != nil:
 			os.Exit(*a.Exit)
 		}

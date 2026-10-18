@@ -121,6 +121,9 @@ func decode[T any](body []byte) (T, error) {
 func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, error) {
 	switch op {
 	case "info":
+		if err := env.installedCLI(); err != nil {
+			return nil, err
+		}
 		harnesses := []string{}
 		for name, binary := range map[string]string{"claude-code": "claude", "codex": "codex", "pi": "pi"} {
 			if _, err := exec.LookPath(binary); err == nil {
@@ -144,7 +147,7 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			}
 		}
 		return HostInfo{Host: env.Host, Version: version.String(), Protocol: version.Protocol, DataDir: env.DataDir,
-			Harnesses: harnesses, Presentations: presentations, Presentation: env.Presentation, Shephrd: env.Self}, nil
+			Harnesses: harnesses, Presentations: presentations, Presentation: env.Presentation, Shephrd: env.CLIPath}, nil
 	case "harness":
 		req, err := decode[HarnessCall](body)
 		if err != nil {
@@ -183,6 +186,9 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 		}
 		return struct{}{}, SetReadOnly(req.Path, req.ReadOnly)
 	case "launch":
+		if err := env.installedCLI(); err != nil {
+			return nil, err
+		}
 		req, err := decode[LaunchRequest](body)
 		if err != nil {
 			return nil, err
@@ -193,9 +199,9 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 		if err := os.WriteFile(BriefPath(req.RunDir), []byte(req.Brief), 0o600); err != nil {
 			return nil, err
 		}
-		req.Spec.Shephrd, req.Spec.Config, req.Spec.Path, req.Spec.Home, req.Spec.Account = env.Self, env.Config, env.Path, env.Home, env.Account
+		req.Spec.Shephrd, req.Spec.Config, req.Spec.Path, req.Spec.Home, req.Spec.Account = env.CLIPath, env.Config, env.Path, env.Home, env.Account
 		if env.Presentation == "" || env.Presentation == "headless" {
-			id, err := Launch(req.RunDir, req.Spec, req.Token)
+			id, err := Launch(req.RunDir, env.Self, req.Spec, req.Token)
 			return LaunchResponse{PID: id.PID, Start: id.Start}, err
 		}
 		endpoint, err := present(ctx, env, req)

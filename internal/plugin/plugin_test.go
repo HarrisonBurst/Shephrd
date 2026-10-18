@@ -34,6 +34,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	return &fixture{t: t, pkg: pkg, cfg: &config.Config{
 		Path:     filepath.Join(t.TempDir(), "config.toml"),
+		CLIPath:  testkit.Binary(t),
 		DataDir:  t.TempDir(),
 		Packages: map[string]config.Package{"tools": {Path: pkg}},
 		Plugins:  map[string]config.PluginConfig{},

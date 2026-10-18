@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"shephrd/internal/testkit"
 	"shephrd/internal/version"
 )
 
@@ -14,7 +15,7 @@ func agentCall(t *testing.T, header agentHeader, body string) agentResponse {
 	t.Helper()
 	command, _ := json.Marshal(header)
 	var out bytes.Buffer
-	Agent(context.Background(), HostEnv{Host: "laptop", DataDir: t.TempDir()}, string(command), strings.NewReader(body), &out)
+	Agent(context.Background(), HostEnv{Host: "laptop", DataDir: t.TempDir(), CLIPath: testkit.Binary(t)}, string(command), strings.NewReader(body), &out)
 	var resp agentResponse
 	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
 		t.Fatalf("agent response: %v\n%s", err, out.String())

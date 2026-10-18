@@ -37,6 +37,14 @@ func main() {
 			file.Close()
 		}
 	}
+	if wait := opt("wait"); wait != "" {
+		for {
+			if _, err := os.Stat(wait); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 	switch opt(req.Kind) {
 	case "crash":
 		fmt.Fprintln(os.Stderr, "crashing on purpose")
