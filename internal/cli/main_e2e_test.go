@@ -103,7 +103,8 @@ func TestMainCoordinatorConsumesInboxAsSoleOwner(t *testing.T) {
 	env.OK("main", "start")
 	env.StartDaemon()
 	env.Eventually("inbox handled", func() bool {
-		return env.OK("main", "status")["state"] == "idle" && env.OK("main", "status")["turn"] == float64(1)
+		status := env.OK("main", "status")
+		return status["state"] == "idle" && status["turn"] == float64(1)
 	})
 	var acked bool
 	for _, call := range env.Calls() {
