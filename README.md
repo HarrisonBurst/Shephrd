@@ -64,6 +64,14 @@ Put `shephrd` on your `PATH`. Every command prints one JSON object; help is the 
 
 Then ask your main driver for work in `my-tool`. It creates a sub-driver with `shephrd task create --role driver --repo my-tool`, which delegates to workers and reports back. With Herdr, each task appears as a tab labelled with its ID, role and title, showing the harness at work; a reported turn ends its own terminal process (closing its tab), and a continuation opens a fresh tab while resuming the same harness session.
 
+## Optional home-host coordinator
+
+Manual mode above remains the default. To run a single headless Claude Code main driver on the home host instead, first install/authenticate `claude` there, ensure `shephrd` and `claude` are on the daemon's `PATH`, and revoke any remote `driver:main` SSH key before activation. Run `shephrd main start` locally, then keep `shephrd daemon` running. This creates one durable Claude session under the Shephrd data directory, outside every task tree. The daemon serializes surface inputs and `driver:main` inbox items through that session. Check `shephrd main status` for its state, session ID and turn log; use `shephrd main pending` and surface-scoped `surface replies` to inspect queued input and correlated output. The coordinator does not add or infer any grant.
+
+A held turn never restarts automatically. Inspect its log, verify the recorded process is gone (including after a host reboot), resolve any pending surface input with `shephrd main reply <id> <text>` and use `shephrd main recover --evidence '<what you verified>'` to continue. For a held inbox turn, recovery explicitly records an operator acknowledgement after independent inspection; it does not pretend the session acknowledged it. Do not recover if side effects or liveness are uncertain. Replies to surface inputs stay in their authenticated surface/thread mailbox. Unsolicited inbox results remain in the local turn log until a separately authenticated return integration exists. Matrix/Larry, phone and laptop adapters, sender authentication, reply delivery and remote-key revocation are external setup, not performed by `main start`. Surface reply retention remains a Shephrd follow-up: the mailbox caps at 1024 replies and then holds further outputs rather than losing input. Do not use this pilot for unbounded production traffic without retention.
+
+An opt-in native Claude headless start/resume smoke test is available with `SHEPHRD_TEST_CLAUDE=1 go test ./internal/cli -run TestNativeClaudeHeadlessCoordinatorCompatibility -v`. It requires a test environment with Claude authentication; ordinary tests use the fake harness and do not call Claude services.
+
 ## Documentation
 
 - [System design](docs/design.md): goal, principles and boundaries.

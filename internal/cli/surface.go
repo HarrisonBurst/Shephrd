@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"database/sql"
 	"strconv"
 	"strings"
 
@@ -8,7 +9,9 @@ import (
 
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
+	"shephrd/internal/execution"
 	"shephrd/internal/fault"
+	"shephrd/internal/maincoord"
 	"shephrd/internal/store"
 )
 
@@ -80,7 +83,60 @@ func surfaceCommand(a *app) *cobra.Command {
 }
 
 func mainMailboxCommand(a *app) *cobra.Command {
-	cmd := &cobra.Command{Use: "main", Short: "Inspect surface input and record operator replies"}
+	cmd := &cobra.Command{Use: "main", Short: "Operate the home-host main coordinator and its mailbox"}
+	start := &cobra.Command{Use: "start", Args: cobra.NoArgs}
+	start.RunE = a.run(func(*cobra.Command, []string) (any, error) {
+		if err := a.requireOperator(); err != nil {
+			return nil, err
+		}
+		cfg, err := a.config()
+		if err != nil {
+			return nil, err
+		}
+		db, err := a.store()
+		if err != nil {
+			return nil, err
+		}
+		return maincoord.Start(a.ctx, db, cfg)
+	})
+	status := &cobra.Command{Use: "status", Args: cobra.NoArgs}
+	status.RunE = a.run(func(*cobra.Command, []string) (any, error) {
+		if err := a.requireOperator(); err != nil {
+			return nil, err
+		}
+		db, err := a.store()
+		if err != nil {
+			return nil, err
+		}
+		state, err := maincoord.Load(db)
+		if err == sql.ErrNoRows {
+			return map[string]any{"state": "disabled"}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := a.config()
+		if err != nil {
+			return nil, err
+		}
+		if state.Turn > 0 {
+			state.Log = execution.LogPath(maincoord.TurnDir(cfg, state.Turn))
+		}
+		return state, nil
+	})
+	var evidence string
+	recoverCmd := &cobra.Command{Use: "recover", Args: cobra.NoArgs}
+	recoverCmd.Flags().StringVar(&evidence, "evidence", "", "independent evidence that the turn was handled and its process has exited")
+	recoverCmd.RunE = a.run(func(*cobra.Command, []string) (any, error) {
+		if err := a.requireOperator(); err != nil {
+			return nil, err
+		}
+		db, err := a.store()
+		if err != nil {
+			return nil, err
+		}
+		return maincoord.Recover(a.ctx, db, evidence)
+	})
 	pending := &cobra.Command{Use: "pending", Args: cobra.NoArgs}
 	var after int64
 	pending.Flags().Int64Var(&after, "after", 0, "input cursor")
@@ -115,9 +171,16 @@ func mainMailboxCommand(a *app) *cobra.Command {
 			return nil, fault.New("usage", "reply cannot be empty")
 		}
 		return a.mutate(func(tx *store.Tx, _ Caller) (any, error) {
+			state, err := maincoord.Load(tx)
+			if err != nil && err != sql.ErrNoRows {
+				return nil, err
+			}
+			if err == nil && (state.State == "starting" || state.State == "running") {
+				return nil, fault.New("turn_active", "cannot reply while the coordinator turn is active")
+			}
 			return coord.ReplySurface(tx, id, body)
 		})
 	})
-	cmd.AddCommand(pending, reply)
+	cmd.AddCommand(pending, reply, start, status, recoverCmd)
 	return cmd
 }

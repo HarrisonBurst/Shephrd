@@ -126,6 +126,10 @@ func (e *Env) killRuns() {
 		return
 	}
 	defer db.Close()
+	var mainPID int
+	if db.QueryRow(`SELECT pid FROM main_coordinator WHERE state IN ('starting','running','held')`).Scan(&mainPID) == nil && mainPID > 1 {
+		syscall.Kill(-mainPID, syscall.SIGKILL)
+	}
 	rows, err := db.Query(`SELECT pid FROM runs WHERE pid IS NOT NULL AND liveness != 'exited'`)
 	if err != nil {
 		return
@@ -162,7 +166,10 @@ func (e *Env) StartDaemon() func() {
 	}
 	e.t.Cleanup(stop)
 	e.Eventually("the daemon to hold its lock", func() bool {
-		r := e.Run("", "repo", "list")
+		r := e.Run("", "main", "status")
+		if r.Code != 0 {
+			r = e.Run("", "repo", "list")
+		}
 		return r.Code == 0 && !strings.Contains(r.Stdout, "daemon_not_running")
 	})
 	return stop

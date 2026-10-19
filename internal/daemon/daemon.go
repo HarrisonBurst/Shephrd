@@ -20,6 +20,7 @@ import (
 	"shephrd/internal/coord"
 	"shephrd/internal/execution"
 	"shephrd/internal/fault"
+	"shephrd/internal/maincoord"
 	"shephrd/internal/notify"
 	"shephrd/internal/plugin"
 	"shephrd/internal/store"
@@ -147,6 +148,7 @@ func (d *Daemon) pass(ctx context.Context) {
 		name string
 		run  func() error
 	}{
+		{"main", func() error { return maincoord.Pass(ctx, d.db, &cfg, d.Getenv) }},
 		{"runs", func() error { return d.observe(ctx, x, &cfg) }},
 		{"nudges", func() error { return d.nudge(ctx, x) }},
 		{"wakes", func() error { return d.wake(ctx, x, reg, &cfg) }},
@@ -324,6 +326,13 @@ func (d *Daemon) deliver(ctx context.Context, reg *plugin.Registry, cfg *config.
 		return err
 	}
 	for _, item := range items {
+		_, err := maincoord.Load(d.db)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil && item.Driver == "driver:main" {
+			continue
+		}
 		kind, name, _ := strings.Cut(item.Driver, ":")
 		delivery := cfg.Drivers[name].Delivery
 		if kind != "driver" || delivery.Provider == "" {
