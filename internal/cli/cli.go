@@ -110,6 +110,14 @@ func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Get
 	}
 	a := &app{ctx: ctx, origin: origin, req: req, getenv: getenv, stream: stream}
 	defer a.close()
+	if strings.HasPrefix(origin.As, "surface:") {
+		if req.RunToken != "" || req.CallToken != "" {
+			return Response{}, fault.New("invalid_token", "a surface request cannot carry an identity token")
+		}
+		if len(req.Argv) < 2 || req.Argv[0] != "surface" || req.Argv[1] != "submit" && req.Argv[1] != "replies" {
+			return Response{}, fault.New("surface_only", "a surface can only submit input or read its replies")
+		}
+	}
 	root := newRoot(a)
 	if len(req.Argv) > 0 && !strings.HasPrefix(req.Argv[0], "-") && !slices.Contains(a.reserved, req.Argv[0]) {
 		result, err := a.pluginCommand(req.Argv[0], req.Argv[1:])

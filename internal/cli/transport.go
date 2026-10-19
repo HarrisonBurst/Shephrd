@@ -85,7 +85,7 @@ func forward(ctx context.Context, cfg *config.Config, req Request, as string, st
 }
 
 // serve is the SSH forced command on the home host. The key fixes who the
-// caller is: --as for a driver or plugin, --host for sessions running on a
+// caller is: --as for a driver, plugin or surface, --host for sessions running on a
 // worker host, which identify themselves with their run token.
 func serve(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv config.Getenv) int {
 	origin := Origin{}
@@ -96,7 +96,7 @@ func serve(ctx context.Context, args []string, stdin io.Reader, stdout, stderr i
 		case "--host":
 			origin.Host = args[i+1]
 		default:
-			return writeError(stderr, fault.New("usage", "serve takes --as driver:<name>, --as plugin:<name> or --host <name>"))
+			return writeError(stderr, fault.New("usage", "serve takes --as driver:<name>, --as plugin:<name>, --as surface:<name> or --host <name>"))
 		}
 	}
 	if (origin.As == "") == (origin.Host == "") || len(args)%2 != 0 {
@@ -106,7 +106,10 @@ func serve(ctx context.Context, args []string, stdin io.Reader, stdout, stderr i
 	if err := json.Unmarshal([]byte(getenv("SSH_ORIGINAL_COMMAND")), &req); err != nil {
 		return writeError(stderr, fault.New("usage", "the SSH command must be one Shephrd request: %v", err))
 	}
-	req.CallToken, req.Stdin = "", stdin
+	if !strings.HasPrefix(origin.As, "surface:") {
+		req.CallToken = ""
+	}
+	req.Stdin = stdin
 	resp, err := Dispatch(ctx, origin, req, getenv, stdout)
 	if err != nil {
 		refused(ctx, origin, req, err, getenv)

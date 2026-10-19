@@ -68,7 +68,7 @@ The daemon starts continuation turns through session execution, under coordinati
 
 ## Inbox
 
-A driver's inbox is the durable record of the items that need its attention: questions, results, blockers and held tasks among its root tasks. `inbox` and `inbox wait` are the sole consumer interface. No delivery configuration is required for a main driver to receive items.
+A driver's inbox is the durable record of the items that need its attention: questions, results, blockers and held tasks among its root tasks. `inbox` and `inbox wait` are the sole consumer interface. No delivery configuration is required for a main driver to receive items. Surface input and correlated output live in separate mailboxes, never in this inbox. The ingress substrate does not consume or acknowledge inbox items; manual mode continues unchanged until a separately specified coordinator lifecycle is enabled.
 
 - **`inbox`** lists pending items, each with the event, the task and its current state, and the exact commands to read more, reply or acknowledge.
 - **`inbox ack <item>`** marks an item handled.

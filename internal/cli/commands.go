@@ -27,12 +27,12 @@ func newRoot(a *app) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.PersistentFlags().String("as", "", "act as driver:<name> (operator only, local only)")
+	root.PersistentFlags().String("as", "", "act as driver:<name> or surface:<name> (operator only, local only)")
 	root.PersistentFlags().String("key", "", "idempotency key for a mutation; generated when absent")
-	root.AddCommand(initCommand(a), versionCommand(a), repoCommand(a), taskCommand(a), reportCommand(a), workspaceCommand(a), hostCommand(a), eventsCommand(a), pluginCommand(a), skillCommand(a), inboxCommand(a), daemonCommand(a), grantCommand(a), artifactCommand(a))
+	root.AddCommand(initCommand(a), versionCommand(a), repoCommand(a), taskCommand(a), reportCommand(a), workspaceCommand(a), hostCommand(a), eventsCommand(a), pluginCommand(a), skillCommand(a), inboxCommand(a), daemonCommand(a), grantCommand(a), artifactCommand(a), surfaceCommand(a), mainMailboxCommand(a))
 	root.AddCommand(privateRunCommands(a)...)
 	for _, forced := range []struct{ use, short string }{
-		{"serve", "The SSH forced command on the home host: serve --as driver:<name>, --as plugin:<name> or --host <name>"},
+		{"serve", "The SSH forced command on the home host: serve --as driver:<name>, --as plugin:<name>, --as surface:<name> or --host <name>"},
 		{"agent", "The SSH forced command on a worker host: host operations for the home host"},
 	} {
 		root.AddCommand(&cobra.Command{Use: forced.use, Short: forced.short, RunE: a.run(func(*cobra.Command, []string) (any, error) {
