@@ -7,6 +7,7 @@ import (
 	"shephrd/internal/config"
 	"shephrd/internal/coord"
 	"shephrd/internal/fault"
+	"shephrd/internal/maincoord"
 )
 
 // Origin is where a request came from: this machine, or SSH through serve,
@@ -32,6 +33,9 @@ func (a *app) identity() (Caller, error) {
 }
 
 func (a *app) resolveCaller() (Caller, error) {
+	if a.req.MainToken != "" {
+		return Caller{Kind: "driver", Name: "main"}, nil
+	}
 	if a.req.RunToken != "" || a.req.CallToken != "" {
 		if a.origin.As != "" {
 			return Caller{}, fault.New("as_not_allowed", "--as cannot be used by a run or a plugin")
@@ -56,7 +60,24 @@ func (a *app) resolveCaller() (Caller, error) {
 			}
 			return caller, nil
 		}
-		return a.callTokenCaller()
+		caller, err := a.callTokenCaller()
+		if err != nil {
+			return Caller{}, err
+		}
+		if caller.Kind == "driver" && caller.Name == "main" {
+			db, err := a.store()
+			if err != nil {
+				return Caller{}, err
+			}
+			allowed, err := maincoord.Allowed(db, "")
+			if err != nil {
+				return Caller{}, err
+			}
+			if !allowed {
+				return Caller{}, fault.New("coordinator_owned", "driver:main is owned by the home-host coordinator")
+			}
+		}
+		return caller, nil
 	}
 	if a.origin.As != "" {
 		kind, name, _ := strings.Cut(a.origin.As, ":")

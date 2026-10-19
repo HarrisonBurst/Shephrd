@@ -53,6 +53,12 @@ func main() {
 	if m := briefTask.FindStringSubmatch(brief); m != nil {
 		task = m[1]
 	}
+	mainTurn := false
+	for _, arg := range os.Args[1:] {
+		if strings.Contains(arg, "Surface input ") || strings.Contains(arg, "driver:main inbox item") {
+			task, mainTurn = "__main__", true
+		}
+	}
 	countFile := filepath.Join(dir, task+".runs")
 	body, _ := os.ReadFile(countFile)
 	index, _ := strconv.Atoi(strings.TrimSpace(string(body)))
@@ -93,7 +99,9 @@ func main() {
 	case m != nil && m[1] == "report":
 		actions = []action{{Write: map[string]string{"report.md": "# Findings\n"}}, {Report: []string{"result", "done", "--file", "report.md"}}}
 	default:
-		actions = []action{{Report: []string{"result", "done"}}}
+		if !mainTurn {
+			actions = []action{{Report: []string{"result", "done"}}}
+		}
 	}
 	for _, a := range actions {
 		switch {
@@ -122,6 +130,20 @@ func main() {
 		case a.Exit != nil:
 			os.Exit(*a.Exit)
 		}
+	}
+	if mainTurn {
+		session := ""
+		for i, arg := range os.Args[1:] {
+			if (arg == "--session-id" || arg == "--resume") && i+2 < len(os.Args) {
+				session = os.Args[i+2]
+			}
+		}
+		for _, arg := range os.Args[1:] {
+			if m := regexp.MustCompile(`Handle this driver:main inbox item as the sole coordinator: \{"id":(\d+)`).FindStringSubmatch(arg); m != nil && len(actions) == 0 {
+				run(dir, task, "shephrd", []string{"inbox", "ack", m[1]}, cwd)
+			}
+		}
+		fmt.Printf("{\"type\":\"result\",\"session_id\":%q,\"result\":%q}\n", session, "fake reply "+strconv.Itoa(index))
 	}
 	if interactive {
 		fmt.Println("turn finished; waiting for input")

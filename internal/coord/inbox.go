@@ -70,6 +70,20 @@ func AckItem(tx *store.Tx, c Caller, id int64) (*Item, error) {
 	return item, nil
 }
 
+func AckRecoveredMainItem(tx *store.Tx, id int64) error {
+	items, err := Items(tx, `i.id = ? AND i.driver = 'driver:main'`, id)
+	if err != nil {
+		return err
+	}
+	if len(items) != 1 {
+		return fault.New("not_found", "no main inbox item %d", id)
+	}
+	if items[0].State == "acked" {
+		return nil
+	}
+	return ack(tx, items[0], "operator", false)
+}
+
 // AckTask acknowledges a closing task's pending items for its driver.
 func AckTask(tx *store.Tx, t *Task) error {
 	items, err := Items(tx, `i.task = ? AND i.state = 'pending'`, t.ID)

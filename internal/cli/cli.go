@@ -19,6 +19,7 @@ import (
 	"shephrd/internal/coord"
 	"shephrd/internal/execution"
 	"shephrd/internal/fault"
+	"shephrd/internal/maincoord"
 	"shephrd/internal/plugin"
 	"shephrd/internal/store"
 	"shephrd/internal/version"
@@ -32,6 +33,7 @@ type Request struct {
 	Key       string    `json:"key"`
 	RunToken  string    `json:"run_token,omitempty"`
 	CallToken string    `json:"call_token,omitempty"`
+	MainToken string    `json:"main_token,omitempty"`
 	Stdin     io.Reader `json:"-"`
 }
 
@@ -50,6 +52,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	switch {
 	case len(args) == 2 && args[0] == "_run":
 		return execution.Supervise(args[1])
+	case len(args) == 2 && args[0] == "_main_turn":
+		return maincoord.Supervise(args[1], getenv)
 	case len(args) == 1 && args[0] == "agent":
 		return agent(ctx, stdin, stdout, getenv)
 	case len(args) > 0 && args[0] == "serve":
@@ -72,7 +76,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	if key == "" {
 		key = uuid.NewString()
 	}
-	req := Request{V: Protocol, Argv: argv, Key: key, RunToken: getenv("SHEPHRD_RUN_TOKEN"), CallToken: getenv("SHEPHRD_CALL_TOKEN"), Stdin: stdin}
+	req := Request{V: Protocol, Argv: argv, Key: key, RunToken: getenv("SHEPHRD_RUN_TOKEN"), CallToken: getenv("SHEPHRD_CALL_TOKEN"), MainToken: getenv("SHEPHRD_MAIN_TOKEN"), Stdin: stdin}
 	if cfg, err := config.Load(getenv); err == nil && cfg.Home != "" && len(argv) > 0 && argv[0] != "init" && argv[0] != "version" {
 		return forward(ctx, &cfg, req, as, stdin, stdout, stderr, getenv)
 	}
@@ -110,6 +114,29 @@ func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Get
 	}
 	a := &app{ctx: ctx, origin: origin, req: req, getenv: getenv, stream: stream}
 	defer a.close()
+	if req.MainToken != "" && (!origin.Local || req.RunToken != "" || req.CallToken != "" || origin.As != "") {
+		return Response{}, fault.New("invalid_token", "a coordinator token is local and exclusive")
+	}
+	if req.MainToken != "" || origin.As == "driver:main" || origin.As == "" && req.RunToken == "" && req.CallToken == "" && origin.Local && len(req.Argv) > 0 && req.Argv[0] != "init" && req.Argv[0] != "version" && req.Argv[0] != "skill" {
+		cfg, err := a.config()
+		if err != nil {
+			return Response{}, err
+		}
+		if cfg.Driver == "main" || origin.As == "driver:main" || req.MainToken != "" {
+			db, err := a.store()
+			if err != nil {
+				return Response{}, err
+			}
+			allowed, err := maincoord.Allowed(db, req.MainToken)
+			if err != nil {
+				return Response{}, err
+			}
+			operatorCommand := origin.Local && req.MainToken == "" && origin.As == "" && len(req.Argv) > 0 && (req.Argv[0] == "main" || req.Argv[0] == "daemon")
+			if !allowed && !operatorCommand {
+				return Response{}, fault.New("coordinator_owned", "driver:main is owned by the home-host coordinator")
+			}
+		}
+	}
 	if strings.HasPrefix(origin.As, "surface:") {
 		if req.RunToken != "" || req.CallToken != "" {
 			return Response{}, fault.New("invalid_token", "a surface request cannot carry an identity token")

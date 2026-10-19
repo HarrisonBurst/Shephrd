@@ -56,7 +56,9 @@ func claudeCode(r HarnessRequest) HarnessCommand {
 	if r.Mode == "resume" {
 		args = append(args, "--resume", session)
 	} else {
-		session = uuid.NewString()
+		if session == "" {
+			session = uuid.NewString()
+		}
 		args = append(args, "--session-id", session, "--name", r.Title)
 	}
 	return HarnessCommand{Command: append(args, "--", r.Prompt), Session: session}
