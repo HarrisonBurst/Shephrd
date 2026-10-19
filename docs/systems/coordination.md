@@ -24,12 +24,13 @@ erDiagram
 
 ### Callers and ownership
 
-A caller is whoever invokes a command. There are four kinds:
+A caller is whoever invokes a command. Task authority has four kinds, plus a fifth, non-owner ingress identity:
 
 - **Driver** (`driver:<name>`): a session Shephrd did not start, such as the main driver the user talks to. Its name comes from configuration locally or from its SSH key remotely.
 - **Run**: one session Shephrd started for a task. It acts with its task's authority and proves itself with the run token Shephrd issued when it started.
 - **Plugin** (`plugin:<name>`): an installed plugin acting on its own, such as when handling an event. It owns the root tasks it creates, as their driver. See [plugins as callers](extensibility.md#plugins-as-callers).
 - **Operator**: the local OS user on the home host, outside any run. The operator can act as any driver. This is cooperative fencing, not a security boundary against the local account.
+- **Surface** (`surface:<name>`): a separate SSH-pinned or explicit local ingress caller. It has no task, inbox, grant, plugin or driver permissions. It can only submit its own input and read replies scoped to its own threads through the [surface mailbox](commands.md#surface-mailbox-substrate). A surface is never an owner in the task tree.
 
 Every task has exactly one owner, fixed by the tree: a driver for a root task, or the parent task for every other task. Ownership belongs to the task, not to whichever run is current, so a sub-driver that crashes and is resumed or retried still owns its children.
 

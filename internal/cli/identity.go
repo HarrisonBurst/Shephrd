@@ -10,7 +10,7 @@ import (
 )
 
 // Origin is where a request came from: this machine, or SSH through serve,
-// whose forced command fixes a driver or plugin identity or a worker host.
+// whose forced command fixes a driver, plugin or surface identity or a worker host.
 type Origin struct {
 	Local bool
 	As    string
@@ -60,8 +60,8 @@ func (a *app) resolveCaller() (Caller, error) {
 	}
 	if a.origin.As != "" {
 		kind, name, _ := strings.Cut(a.origin.As, ":")
-		if !(kind == "driver" || kind == "plugin" && !a.origin.Local) || !config.NamePattern.MatchString(name) {
-			return Caller{}, fault.New("usage", "--as takes driver:<name>, got %q", a.origin.As)
+		if !(kind == "driver" || kind == "surface" || kind == "plugin" && !a.origin.Local) || !config.NamePattern.MatchString(name) {
+			return Caller{}, fault.New("usage", "--as takes driver:<name> or surface:<name>, got %q", a.origin.As)
 		}
 		return Caller{Kind: kind, Name: name, Operator: a.origin.Local}, nil
 	}

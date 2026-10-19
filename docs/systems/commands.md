@@ -6,7 +6,7 @@
 
 This spec defines how every caller invokes Shephrd, locally or from another host over SSH, and the conventions every command follows. Each system's spec defines the meaning of its own commands.
 
-Parity holds by construction: there is one binary and one command tree, and a forwarded request runs the same command code on the home host as a local one. There is no second command list for remote callers to drift from.
+Parity holds by construction: there is one binary and one command tree, and a forwarded request runs the same command code on the home host as a local one. There is no second command list for remote callers to drift from. Surface callers are intentionally restricted to the ingress commands below.
 
 ## Topology
 
@@ -36,7 +36,7 @@ On a single machine, that machine is the home host and nothing is forwarded. Thi
 | `hermes` | Client host | The main driver, whose commands are forwarded to `workhorse` |
 | `laptop` | Worker host, or its own installation | Extra sub-drivers and workers for `workhorse`, or a separate Shephrd with its own home |
 
-The main driver on `hermes` is just a caller. It connects outbound over SSH as `driver:main`, including for `inbox wait`; there is no driver registry, main-driver run or home-to-client injection. If `hermes` goes down, work on `workhorse` continues and results wait for it. A `laptop` used as a worker host can sleep: its runs then have liveness `unknown`, and anything that needs them gone is refused until it returns. Route only work that tolerates that to it.
+In manual mode, the main driver on `hermes` is just a caller. It connects outbound over SSH as `driver:main`, including for `inbox wait`; there is no driver registry, main-driver run or home-to-client injection. The surface mailbox does not start a coordinator or change this mode. If `hermes` goes down, work on `workhorse` continues and results wait for it. A `laptop` used as a worker host can sleep: its runs then have liveness `unknown`, and anything that needs them gone is refused until it returns. Route only work that tolerates that to it.
 
 ## Requests
 
@@ -71,8 +71,9 @@ All output is JSON. Help is the only text output and is rendered by the local bi
 | Run | `SHEPHRD_RUN_TOKEN` set by session execution | Token carried in the request. The worker host's key forces `shephrd serve --host <name>`, and a token is accepted only for a run started on that host. |
 | Plugin | `SHEPHRD_CALL_TOKEN` given to the plugin process by Shephrd | Fixed by the key's forced command: `shephrd serve --as plugin:<name>`. |
 | Operator | Local OS user on the home host, outside any run | Not through `serve`. A normal SSH login to the home host is a local session. |
+| Surface | Explicit local `--as surface:<name>` on the home host | Fixed by a separate key's forced command: `shephrd serve --as surface:<name>`. The request cannot supply `--as` or an identity token. |
 
-A run token or call token present in the environment takes precedence, and `--as` is then refused, so neither a session nor a plugin can act as a driver.
+A run token or call token present in the environment takes precedence, and `--as` is then refused, so neither a session nor a plugin can act as a driver or surface. Surface identities are not task owners and cannot invoke any non-surface command (including plugin subcommands, `inbox ack`, reads of task state, or admin commands); this check occurs before plugin dispatch or command parsing. Their SSH key must be distinct from any driver key. The local operator OS-account boundary remains trusted.
 
 Authorization is the same rule everywhere, using ownership from [coordination](coordination.md#callers-and-ownership):
 
@@ -81,7 +82,7 @@ Authorization is the same rule everywhere, using ownership from [coordination](c
 - **Code landing and discard** additionally need a recorded grant, defined by [artifacts and authority](artifacts.md#grants). A standing `land` grant is prior user authorization; discard still needs explicit per-action approval even with a standing `discard` grant. These approval rules are policy, not additional CLI authorization checks.
 - **Host administration** (`init`, `repo add`, `plugin sync`) is operator-only, because it changes what runs on a host.
 
-A remote driver is limited by what it owns and what it has been granted, not by a reduced command list.
+A remote driver is limited by what it owns and what it has been granted, not by a reduced command list. A surface cannot read another surface's input or replies. Manual-mode driver keys retain their existing permissions and must be revoked separately before coordinator rollout.
 
 ## Retries and versions
 
@@ -152,6 +153,9 @@ Each command's behavior is defined by the spec named in its row.
 | `host list` | Hosts with reachability, version and installed providers | [Execution](execution.md) |
 | `report progress`, `question`, `result`, `blocker`, `note` | A run reports on its own task | [Notification](notifications.md) |
 | `inbox`, `inbox wait --after <item>`, `inbox ack <item>` | The owner reads or watches its pending items, then explicitly acknowledges handled ones | [Notification](notifications.md) |
+| `surface submit --thread <id> <text|->` | Surface-only bounded input, with the envelope `--key` as a surface-scoped retry key | [Surface mailbox](#surface-mailbox-substrate) |
+| `surface replies --thread <id> [--after <id>]` | Surface-only bounded reply page after a durable cursor | [Surface mailbox](#surface-mailbox-substrate) |
+| `main pending [--after <id>]`, `main reply <input-id> <text|->` | Local operator-only mailbox inspection and correlated reply recording; not a running coordinator | [Surface mailbox](#surface-mailbox-substrate) |
 | `task accept` (`task deliver` compatibility alias), `task verify`, `task discard` | Accept or land a result, re-check landing proof, discard work | [Artifacts](artifacts.md) |
 | `grant`, `grant revoke` | Delegate or revoke `land` and `discard` authority | [Artifacts](artifacts.md) |
 | `artifact show`, `artifact read` | Read an artifact's metadata or bytes | [Artifacts](artifacts.md) |
@@ -163,13 +167,19 @@ Each command's behavior is defined by the spec named in its row.
 
 `help` prints text help for any command. `agent`, `_run` and `_started` are private commands between Shephrd binaries of the same release, not part of this surface.
 
-That is 44 leaf commands, against 68 today. Each role uses far fewer:
+The surface mailbox adds four leaf commands to the original 44. Each role uses far fewer:
 
 | Role | Commands it normally uses |
 |---|---|
 | Worker | `report` |
 | Sub-driver | `task create`, `task show`, `task list`, `task send`, `task accept`, `report`, `artifact read` |
 | Main driver | `task create`, `task send`, `task show`, `task list`, `task accept`, `grant`, `inbox`, `inbox ack`, `artifact read` |
+
+## Surface mailbox substrate
+
+A surface supplies a `--thread` name matching the configured name pattern; the pair `(authenticated surface, thread)` scopes its conversation. No client-supplied sender claim, target surface or driver identity is accepted. `surface submit` persists at most 8 KiB of nonempty text as one globally ordered input, with `--key` scoped to the surface; identical retries return the same input ID, different payloads under the same key return `key_conflict`. Pending inputs are capped at 1024 globally; full mailboxes refuse new submissions without dropping old ones. `main pending` returns up to 100 unanswered inputs in ID order, globally across surfaces. Only the local operator may record a reply to an existing unanswered input. The reply is at most 8 KiB of nonempty text, atomically marks that input answered and gets its own monotonically increasing cursor. At most 1024 replies are retained globally; when full, recording another reply is refused without consuming its input. A later lifecycle must add safe cursor-based retention before production activation. `surface replies` returns at most 100 replies in cursor order strictly after `--after`, for that same surface and thread. A reply is persisted before it is readable and is replayed on reconnect until the client advances its cursor; reading never acknowledges an inbox item. IDs and cursors are positive integers, with `0` the initial cursor. Input and output are distinct from task reports, events, grants and approval. A driver, run or plugin cannot call these commands; surface callers cannot call `main` commands.
+
+This stage supplies durable ingress and an operator-only test/recovery reply path, **not a coordinator process**. Nothing drains pending input automatically or changes manual `driver:main` inbox behavior. A later lifecycle implementation must serialize a single native session, own turns and inbox consumption, reconcile uncertain process state and specify the authenticated return route for unsolicited results before enabling coordinator mode. Upstream Matrix sender validation and cross-device sharing are outside Shephrd; no cross-surface transcript sharing is implicit.
 
 ## What this replaces
 
