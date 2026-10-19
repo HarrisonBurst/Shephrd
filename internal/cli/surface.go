@@ -78,7 +78,26 @@ func surfaceCommand(a *app) *cobra.Command {
 		items, err := coord.SurfaceReplies(db, caller.Name, replyThread, after)
 		return map[string]any{"replies": items}, err
 	})
-	cmd.AddCommand(submit, replies)
+	var ackThread string
+	ack := &cobra.Command{Use: "ack <cursor>", Args: cobra.ExactArgs(1)}
+	ack.Flags().StringVar(&ackThread, "thread", "", "conversation thread")
+	ack.RunE = a.run(func(_ *cobra.Command, args []string) (any, error) {
+		if _, err := a.surfaceCaller(); err != nil {
+			return nil, err
+		}
+		if err := surfaceThread(ackThread); err != nil {
+			return nil, err
+		}
+		cursor, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil || cursor <= 0 {
+			return nil, fault.New("usage", "cursor must be positive")
+		}
+		return a.mutate(func(tx *store.Tx, caller Caller) (any, error) {
+			stored, err := coord.AckSurface(tx, caller.Name, ackThread, cursor)
+			return map[string]any{"cursor": stored}, err
+		})
+	})
+	cmd.AddCommand(submit, replies, ack)
 	return cmd
 }
 

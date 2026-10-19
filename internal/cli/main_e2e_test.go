@@ -1,12 +1,17 @@
 package cli_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+
+	"shephrd/internal/coord"
+	"shephrd/internal/store"
 	"time"
 )
 
@@ -98,7 +103,8 @@ func TestMainCoordinatorConsumesInboxAsSoleOwner(t *testing.T) {
 	env.OK("main", "start")
 	env.StartDaemon()
 	env.Eventually("inbox handled", func() bool {
-		return env.OK("main", "status")["state"] == "idle" && env.OK("main", "status")["turn"] == float64(1)
+		status := env.OK("main", "status")
+		return status["state"] == "idle" && status["turn"] == float64(1)
 	})
 	var acked bool
 	for _, call := range env.Calls() {
@@ -111,6 +117,125 @@ func TestMainCoordinatorConsumesInboxAsSoleOwner(t *testing.T) {
 	}
 	if s := env.OK("main", "status"); !strings.Contains(s["result"].(string), "fake reply") {
 		t.Fatalf("inbox output not retained locally: %v", s)
+	}
+	if got := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any); len(got) != 0 {
+		t.Fatalf("default leaked unsolicited output: %v", got)
+	}
+}
+
+func TestMainReturnRequiresExplicitHomeScope(t *testing.T) {
+	env := initialized(t)
+	env.AppendConfig("[main_return]\nsurface = \"larry\"")
+	env.Refused("invalid_config", "main", "start")
+}
+
+func TestMainInboxReturnRoutePinnedAndSurfaceCursor(t *testing.T) {
+	env, _ := withHarness(t)
+	env.AppendConfig("[main_return]\nsurface = \"larry\"\nthread = \"room\"")
+	env.Script(map[string][][]map[string]any{"__main__": {{{"sleep": "700ms"}, {"shephrd": []string{"inbox", "ack", "1"}}}, {}}})
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Report to main")
+	env.OK("task", "start", "t_1")
+	env.Eventually("inbox queued", func() bool { return len(env.OK("inbox")["items"].([]any)) == 1 })
+	env.OK("main", "start")
+	stop := env.StartDaemon()
+	env.Eventually("inbox running", func() bool { return env.OK("main", "status")["state"] == "running" })
+	config, err := os.ReadFile(env.ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(env.ConfigPath(), []byte(strings.Replace(string(config), "surface = \"larry\"", "surface = \"phone\"", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env.Eventually("inbox result routed", func() bool {
+		return len(env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any)) == 1
+	})
+	stop()
+	larry := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any)
+	out := larry[0].(map[string]any)
+	if out["inbox_item"] != float64(1) || out["turn"] != float64(1) || out["body"] != "fake reply 0" || out["input"] != nil {
+		t.Fatalf("routed source: %v", out)
+	}
+	if other := env.OK("surface", "replies", "--thread", "room", "--as", "surface:phone")["replies"].([]any); len(other) != 0 {
+		t.Fatalf("changed route leaked output: %v", other)
+	}
+	env.Refused("invalid_cursor", "surface", "ack", "--thread", "room", "1", "--as", "surface:phone")
+	env.Refused("invalid_cursor", "surface", "ack", "--thread", "other", "1", "--as", "surface:larry")
+	env.StartDaemon()
+	time.Sleep(350 * time.Millisecond)
+	if got := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any); len(got) != 1 {
+		t.Fatalf("restart lost or duplicated output: %v", got)
+	}
+	env.OK("surface", "ack", "--thread", "room", "1", "--as", "surface:larry")
+	env.OK("surface", "ack", "--thread", "room", "1", "--as", "surface:larry")
+	if got := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any); len(got) != 0 {
+		t.Fatalf("ack did not prune: %v", got)
+	}
+	env.OK("surface", "submit", "--thread", "room", "follow-up", "--as", "surface:larry")
+	env.Eventually("correlated output", func() bool {
+		return len(env.OK("surface", "replies", "--thread", "room", "--after", "1", "--as", "surface:larry")["replies"].([]any)) == 1
+	})
+	later := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any)[0].(map[string]any)
+	if later["input"] != float64(1) || later["id"].(float64) <= out["id"].(float64) {
+		t.Fatalf("shared cursor order: %v %v", out, later)
+	}
+	env.Refused("coordinator_owned", "surface", "ack", "--thread", "room", fmt.Sprint(later["id"]))
+}
+
+func TestMainInboxReturnCapacityHoldsUntilRecovery(t *testing.T) {
+	env, _ := withHarness(t)
+	env.AppendConfig("[main_return]\nsurface = \"larry\"\nthread = \"room\"")
+	env.Script(map[string][][]map[string]any{"__main__": {{{"sleep": "100ms"}}}})
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Report to main")
+	env.OK("task", "start", "t_1")
+	env.Eventually("inbox queued", func() bool { return len(env.OK("inbox")["items"].([]any)) == 1 })
+	db, err := store.Open(context.Background(), filepath.Join(env.Home, ".local/state/shephrd/shephrd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Write(context.Background(), func(tx *store.Tx) error {
+		for i := 0; i < 1024; i++ {
+			input, err := coord.SubmitSurface(tx, "other", "room", "input")
+			if err != nil {
+				return err
+			}
+			if _, err := coord.ReplySurface(tx, input.ID, "reply"); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.OK("main", "start")
+	stop := env.StartDaemon()
+	env.Eventually("output mailbox full hold", func() bool { return env.OK("main", "status")["state"] == "held" })
+	stop()
+	s := env.OK("main", "status")
+	if s["reason"] != "surface output mailbox full" || s["result"] != "fake reply 0" || s["route_surface"] != "larry" {
+		t.Fatalf("output lost on full mailbox: %v", s)
+	}
+	if got := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any); len(got) != 0 {
+		t.Fatalf("exposed result before persistence: %v", got)
+	}
+	env.Refused("mailbox_full", "main", "recover", "--evidence", "inspected result")
+	env.OK("surface", "ack", "--thread", "room", "100", "--as", "surface:other")
+	env.OK("main", "recover", "--evidence", "independently inspected completed turn and result")
+	out := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any)
+	if len(out) != 1 || out[0].(map[string]any)["id"] != float64(1025) {
+		t.Fatalf("recovered output: %v", out)
+	}
+	env.StartDaemon()
+	time.Sleep(350 * time.Millisecond)
+	seen := 0
+	for _, item := range env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any) {
+		if item.(map[string]any)["inbox_item"] == float64(1) {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("restart duplicated or lost recovered output: %d", seen)
 	}
 }
 
@@ -159,19 +284,31 @@ func TestMainCoordinatorCreatesTaskAsMainDuringSurfaceTurn(t *testing.T) {
 
 func TestMainCoordinatorHoldsUnacknowledgedInbox(t *testing.T) {
 	env, _ := withHarness(t)
+	env.AppendConfig("[main_return]\nsurface = \"larry\"\nthread = \"room\"")
 	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Report to main")
 	env.OK("task", "start", "t_1")
 	env.Eventually("inbox", func() bool { return len(env.OK("inbox")["items"].([]any)) == 1 })
 	env.Script(map[string][][]map[string]any{"__main__": {{{"sleep": "100ms"}}}})
 	env.OK("main", "start")
-	env.StartDaemon()
+	stop := env.StartDaemon()
 	env.Eventually("unacknowledged turn held", func() bool { return env.OK("main", "status")["state"] == "held" })
+	stop()
 	s := env.OK("main", "status")
 	if s["reason"] != "inbox item not acknowledged" || s["item"] != float64(1) {
 		t.Fatalf("hold: %v", s)
 	}
 	env.Refused("coordinator_owned", "inbox", "ack", "1")
+	if got := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any); len(got) != 1 || got[0].(map[string]any)["inbox_item"] != float64(1) {
+		t.Fatalf("unacknowledged inbox output not retained: %v", got)
+	}
+	env.OK("surface", "ack", "--thread", "room", "1", "--as", "surface:larry")
+	if s := env.OK("main", "status"); s["state"] != "held" {
+		t.Fatalf("surface acknowledgement cleared inbox hold: %v", s)
+	}
 	env.OK("main", "recover", "--evidence", "read turn log and verified response handled")
+	if got := env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any); len(got) != 0 {
+		t.Fatalf("recovery replayed acknowledged output: %v", got)
+	}
 	if s := env.OK("main", "status"); s["state"] != "idle" {
 		t.Fatalf("recovery: %v", s)
 	}

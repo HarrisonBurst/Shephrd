@@ -81,6 +81,16 @@ func TestSurfaceSSHIdentityIsolationAndManualMode(t *testing.T) {
 	if got := larry.OK("surface", "replies", "--thread", "room", "--after", "4")["replies"].([]any); len(got) != 0 {
 		t.Fatalf("advanced cursor: %v", got)
 	}
+	phone.Refused("invalid_cursor", "surface", "ack", "--thread", "room", "4")
+	larry.Refused("invalid_cursor", "surface", "ack", "--thread", "other", "4")
+	larry.OK("surface", "ack", "--thread", "room", "4")
+	larry.OK("surface", "ack", "--thread", "room", "4")
+	if got := larry.OK("surface", "replies", "--thread", "room")["replies"].([]any); len(got) != 0 {
+		t.Fatalf("ack did not prune own scope: %v", got)
+	}
+	if got := phone.OK("surface", "replies", "--thread", "room")["replies"].([]any); len(got) != 1 {
+		t.Fatalf("ack pruned foreign scope: %v", got)
+	}
 }
 
 func TestSurfaceForcedCommandRejectsIdentityTokens(t *testing.T) {

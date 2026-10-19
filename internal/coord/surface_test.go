@@ -86,6 +86,76 @@ func TestSurfaceMailboxConcurrentOrderAndDurableReplies(t *testing.T) {
 	}
 }
 
+func TestRoutedInboxOutputAckRetentionAndCapacity(t *testing.T) {
+	f := newFixture(t)
+	task := f.must(f.create(main, NewTask{Role: "driver", Repo: "api", Objective: "Report"}))
+	if err := f.write(func(tx *store.Tx) error {
+		event, err := tx.Emit("test", "operator", task.ID, 0, 0, nil)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO inbox_items(id, driver, task, event, state, created_at) VALUES (1, 'driver:main', ?, ?, 'pending', ?)`, task.ID, event, store.Timestamp(tx.Now))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 1024; i++ {
+		if err := f.write(func(tx *store.Tx) error {
+			_, err := SubmitSurface(tx, "other", "room", "input")
+			if err != nil {
+				return err
+			}
+			_, err = ReplySurface(tx, int64(i), "reply")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.write(func(tx *store.Tx) error {
+		return RouteInbox(tx, "larry", "room", 1, 1, "result")
+	}); kind(err) != "mailbox_full" {
+		t.Fatalf("full mailbox accepted inbox output: %v", err)
+	}
+	if err := f.write(func(tx *store.Tx) error {
+		_, err := AckSurface(tx, "larry", "room", 1)
+		return err
+	}); kind(err) != "invalid_cursor" {
+		t.Fatalf("foreign cursor accepted: %v", err)
+	}
+	if err := f.write(func(tx *store.Tx) error {
+		_, err := AckSurface(tx, "other", "room", 100)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.write(func(tx *store.Tx) error {
+		return RouteInbox(tx, "larry", "room", 1, 1, "result")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	replies, err := SurfaceReplies(f.db, "larry", "room", 0)
+	if err != nil || len(replies) != 1 || replies[0].ID != 1025 || replies[0].InboxItem != 1 || replies[0].Turn != 1 {
+		t.Fatalf("routed output: %v %v", replies, err)
+	}
+	if err := f.write(func(tx *store.Tx) error {
+		_, err := AckSurface(tx, "larry", "room", replies[0].ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.write(func(tx *store.Tx) error {
+		return RouteInbox(tx, "larry", "room", 1, 1, "result")
+	}); err != nil {
+		t.Fatalf("duplicate after prune: %v", err)
+	}
+	if got, err := SurfaceReplies(f.db, "larry", "room", 0); err != nil || len(got) != 0 {
+		t.Fatalf("routed output replay after ack: %v %v", got, err)
+	}
+	if got, err := SurfaceReplies(f.db, "other", "room", 100); err != nil || len(got) != 100 {
+		t.Fatalf("other scope pruned: %v %v", got, err)
+	}
+}
+
 func TestSurfaceMailboxCapacityAndSingleReply(t *testing.T) {
 	f := newFixture(t)
 	for i := 0; i < 1024; i++ {

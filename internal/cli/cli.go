@@ -141,8 +141,8 @@ func Dispatch(ctx context.Context, origin Origin, req Request, getenv config.Get
 		if req.RunToken != "" || req.CallToken != "" {
 			return Response{}, fault.New("invalid_token", "a surface request cannot carry an identity token")
 		}
-		if len(req.Argv) < 2 || req.Argv[0] != "surface" || req.Argv[1] != "submit" && req.Argv[1] != "replies" {
-			return Response{}, fault.New("surface_only", "a surface can only submit input or read its replies")
+		if len(req.Argv) < 2 || req.Argv[0] != "surface" || req.Argv[1] != "submit" && req.Argv[1] != "replies" && req.Argv[1] != "ack" {
+			return Response{}, fault.New("surface_only", "a surface can only submit input, read output or acknowledge its cursor")
 		}
 	}
 	root := newRoot(a)

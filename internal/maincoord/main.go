@@ -26,23 +26,25 @@ import (
 )
 
 type State struct {
-	Session string `json:"session"`
-	State   string `json:"state"`
-	Turn    int64  `json:"turn"`
-	Ready   bool   `json:"ready"`
-	Kind    string `json:"kind,omitempty"`
-	Item    int64  `json:"item,omitempty"`
-	PID     int    `json:"pid,omitempty"`
-	Started string `json:"started,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-	Result  string `json:"result,omitempty"`
-	Log     string `json:"log,omitempty"`
-	Token   string `json:"-"`
+	Session      string `json:"session"`
+	State        string `json:"state"`
+	Turn         int64  `json:"turn"`
+	Ready        bool   `json:"ready"`
+	Kind         string `json:"kind,omitempty"`
+	Item         int64  `json:"item,omitempty"`
+	PID          int    `json:"pid,omitempty"`
+	Started      string `json:"started,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	Result       string `json:"result,omitempty"`
+	RouteSurface string `json:"route_surface,omitempty"`
+	RouteThread  string `json:"route_thread,omitempty"`
+	Log          string `json:"log,omitempty"`
+	Token        string `json:"-"`
 }
 
 func Load(q interface{ QueryRow(string, ...any) *sql.Row }) (State, error) {
 	var s State
-	err := q.QueryRow(`SELECT session, token, state, turn, ready, kind, item, pid, started, reason, result FROM main_coordinator WHERE id = 1`).Scan(&s.Session, &s.Token, &s.State, &s.Turn, &s.Ready, &s.Kind, &s.Item, &s.PID, &s.Started, &s.Reason, &s.Result)
+	err := q.QueryRow(`SELECT session, token, state, turn, ready, kind, item, pid, started, reason, result, route_surface, route_thread FROM main_coordinator WHERE id = 1`).Scan(&s.Session, &s.Token, &s.State, &s.Turn, &s.Ready, &s.Kind, &s.Item, &s.PID, &s.Started, &s.Reason, &s.Result, &s.RouteSurface, &s.RouteThread)
 	return s, err
 }
 
@@ -113,6 +115,11 @@ func Recover(ctx context.Context, db *store.Store, evidence string) (State, erro
 				return fault.New("input_pending", "record a correlated reply before recovering this turn")
 			}
 		} else if s.Kind == "inbox" {
+			if s.RouteSurface != "" && s.Result != "" {
+				if err := coord.RouteInbox(tx, s.RouteSurface, s.RouteThread, s.Item, s.Turn, s.Result); err != nil {
+					return err
+				}
+			}
 			var state string
 			if err := tx.QueryRow(`SELECT state FROM inbox_items WHERE id = ?`, s.Item).Scan(&state); err != nil {
 				return err
@@ -126,7 +133,7 @@ func Recover(ctx context.Context, db *store.Store, evidence string) (State, erro
 		if _, err := tx.Emit("main.recovered", "operator", 0, 0, 0, map[string]any{"turn": s.Turn, "evidence": evidence}); err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE main_coordinator SET state = 'idle', kind = '', item = 0, pid = 0, started = '', reason = '' WHERE id = 1`)
+		_, err = tx.Exec(`UPDATE main_coordinator SET state = 'idle', kind = '', item = 0, pid = 0, started = '', reason = '', route_surface = '', route_thread = '' WHERE id = 1`)
 		s.State, s.Kind, s.Item, s.PID, s.Started, s.Reason = "idle", "", 0, 0, "", ""
 		return err
 	})
@@ -175,8 +182,12 @@ func Pass(ctx context.Context, db *store.Store, cfg *config.Config, getenv confi
 		}
 		next := s.Turn + 1
 		dir := TurnDir(cfg, next)
+		route := config.MainReturn{}
+		if kind == "inbox" {
+			route = cfg.MainReturn
+		}
 		if err := db.Write(ctx, func(tx *store.Tx) error {
-			_, err := tx.Exec(`UPDATE main_coordinator SET state = 'starting', turn = ?, kind = ?, item = ?, pid = 0, started = ?, reason = '', result = '' WHERE id = 1 AND state = 'idle'`, next, kind, item, store.Timestamp(tx.Now))
+			_, err := tx.Exec(`UPDATE main_coordinator SET state = 'starting', turn = ?, kind = ?, item = ?, pid = 0, started = ?, reason = '', result = '', route_surface = ?, route_thread = ? WHERE id = 1 AND state = 'idle'`, next, kind, item, store.Timestamp(tx.Now), route.Surface, route.Thread)
 			return err
 		}); err != nil {
 			return err
@@ -222,9 +233,22 @@ func Pass(ctx context.Context, db *store.Store, cfg *config.Config, getenv confi
 			}
 			if s.Kind == "surface" {
 				if _, err = coord.ReplySurface(tx, s.Item, result); err != nil {
+					if fault.As(err).Kind != "mailbox_full" {
+						return err
+					}
+					_, err = tx.Exec(`UPDATE main_coordinator SET state = 'held', ready = 1, reason = 'surface output mailbox full', result = ? WHERE id = 1`, result)
 					return err
 				}
 			} else {
+				if s.RouteSurface != "" {
+					if err = coord.RouteInbox(tx, s.RouteSurface, s.RouteThread, s.Item, s.Turn, result); err != nil {
+						if fault.As(err).Kind != "mailbox_full" {
+							return err
+						}
+						_, err = tx.Exec(`UPDATE main_coordinator SET state = 'held', ready = 1, reason = 'surface output mailbox full', result = ? WHERE id = 1`, result)
+						return err
+					}
+				}
 				var state string
 				if err = tx.QueryRow(`SELECT state FROM inbox_items WHERE id = ?`, s.Item).Scan(&state); err != nil {
 					return err
@@ -234,7 +258,7 @@ func Pass(ctx context.Context, db *store.Store, cfg *config.Config, getenv confi
 					return err
 				}
 			}
-			_, err = tx.Exec(`UPDATE main_coordinator SET state = 'idle', ready = 1, kind = '', item = 0, pid = 0, started = '', reason = '', result = ? WHERE id = 1`, result)
+			_, err = tx.Exec(`UPDATE main_coordinator SET state = 'idle', ready = 1, kind = '', item = 0, pid = 0, started = '', reason = '', result = ?, route_surface = '', route_thread = '' WHERE id = 1`, result)
 			return err
 		})
 	}
@@ -319,7 +343,7 @@ func Supervise(dir string, getenv config.Getenv) int {
 		if err == nil {
 			var data []byte
 			data, err = json.Marshal(items[0])
-			prompt = fmt.Sprintf("Handle this driver:main inbox item as the sole coordinator: %s\nRead relevant task details, handle the request, then run shephrd inbox ack %d after handling. No automatic user grant exists. Your final response remains in the local turn log, not a surface reply.", data, s.Item)
+			prompt = fmt.Sprintf("Handle this driver:main inbox item as the sole coordinator: %s\nRead relevant task details, handle the request, then run shephrd inbox ack %d after handling. No automatic user grant exists. Your final response is retained locally and may be routed to the configured return surface; it does not acknowledge the inbox or authorize another lifecycle action.", data, s.Item)
 		}
 	}
 	if err != nil {
