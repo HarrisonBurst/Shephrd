@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,49 @@ func TestMainCoordinatorConsumesInboxAsSoleOwner(t *testing.T) {
 	}
 }
 
+func TestMainCoordinatorCreatesTaskAsMainDuringSurfaceTurn(t *testing.T) {
+	env, _ := withHarness(t)
+	env.Script(map[string][][]map[string]any{"__main__": {{
+		{"shephrd": []string{"task", "create", "--role", "driver", "--repo", "api", "--objective", "Investigate the request"}},
+		{"shephrd": []string{"task", "show", "t_1"}},
+	}}})
+	env.OK("surface", "submit", "--thread", "room", "Investigate the request", "--as", "surface:larry")
+	env.OK("main", "start")
+	env.Refused("coordinator_owned", "task", "create", "--role", "driver", "--repo", "api", "--objective", "Manual duplicate")
+	env.StartDaemon()
+	env.Eventually("turn reply", func() bool {
+		return len(env.OK("surface", "replies", "--thread", "room", "--as", "surface:larry")["replies"].([]any)) == 1
+	})
+	commands := []map[string]any{}
+	for _, call := range env.Calls() {
+		if call["task"] == "__main__" && call["command"] != nil {
+			commands = append(commands, call)
+		}
+	}
+	if len(commands) != 2 {
+		t.Fatalf("coordinator commands: %v", commands)
+	}
+	for _, call := range commands {
+		if call["error"] != "<nil>" {
+			t.Fatalf("coordinator command failed: %v", call)
+		}
+	}
+	var created map[string]any
+	if err := json.Unmarshal([]byte(commands[0]["stdout"].(string)), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created["id"] != "t_1" || created["driver"] != "driver:main" {
+		t.Fatalf("task ownership: %v", created)
+	}
+	var shown map[string]any
+	if err := json.Unmarshal([]byte(commands[1]["stdout"].(string)), &shown); err != nil {
+		t.Fatal(err)
+	}
+	if task := shown["task"].(map[string]any); task["driver"] != "driver:main" {
+		t.Fatalf("task read after create: %v", task)
+	}
+}
+
 func TestMainCoordinatorHoldsUnacknowledgedInbox(t *testing.T) {
 	env, _ := withHarness(t)
 	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Report to main")
@@ -186,11 +230,96 @@ func TestMainCoordinatorRestartHoldsMissingExitRecord(t *testing.T) {
 
 func processExists(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
+func cloneClaudeTestAuth(t *testing.T, target string) {
+	t.Helper()
+	source := os.Getenv("SHEPHRD_TEST_CLAUDE_AUTH_HOME")
+	if source == "" {
+		t.Skip("set SHEPHRD_TEST_CLAUDE_AUTH_HOME to a separate disposable authenticated Claude profile; never use your live HOME")
+	}
+	resolved, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := filepath.EvalSymlinks(os.Getenv("HOME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == live || strings.HasPrefix(resolved, live+string(os.PathSeparator)) || resolved == target {
+		t.Fatal("Claude test auth source must not be the live or destination HOME")
+	}
+	copied := 0
+	for _, name := range []string{".claude.json", filepath.Join(".claude", ".credentials.json")} {
+		if name != ".claude.json" {
+			dir, err := os.Lstat(filepath.Join(resolved, ".claude"))
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !dir.IsDir() {
+				t.Fatal("Claude test auth directory must not be a symlink")
+			}
+		}
+		from := filepath.Join(resolved, name)
+		info, err := os.Lstat(from)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Fatalf("Claude auth source %s is not a regular file", name)
+		}
+		body, err := os.ReadFile(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		to := filepath.Join(target, name)
+		if err := os.MkdirAll(filepath.Dir(to), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(to, body, 0600); err != nil {
+			t.Fatal(err)
+		}
+		copied++
+	}
+	if copied == 0 {
+		t.Fatalf("Claude test auth source %s has no file-based profile", resolved)
+	}
+}
+
+func TestNativeClaudeAuthCloneLeavesSourceUntouched(t *testing.T) {
+	source, target := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(source, ".claude"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"test":"disposable"}`)
+	path := filepath.Join(source, ".claude", ".credentials.json")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHEPHRD_TEST_CLAUDE_AUTH_HOME", source)
+	cloneClaudeTestAuth(t, target)
+	for _, file := range []string{path, filepath.Join(target, ".claude", ".credentials.json")} {
+		body, err := os.ReadFile(file)
+		if err != nil || string(body) != string(original) {
+			t.Fatalf("auth profile copy %s: %v %s", file, err, body)
+		}
+		info, err := os.Stat(file)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("auth file permissions %s: %v %v", file, info, err)
+		}
+	}
+}
+
 func TestNativeClaudeHeadlessCoordinatorCompatibility(t *testing.T) {
 	if os.Getenv("SHEPHRD_TEST_CLAUDE") != "1" {
 		t.Skip("set SHEPHRD_TEST_CLAUDE=1 to exercise authenticated native Claude headless start and resume")
 	}
 	env := initialized(t)
+	cloneClaudeTestAuth(t, env.Home)
 	env.Path = []string{filepath.Dir(env.Bin)}
 	env.OK("surface", "submit", "--thread", "smoke", "Reply with exactly OK.", "--as", "surface:smoke")
 	env.OK("main", "start")
