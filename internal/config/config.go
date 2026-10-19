@@ -22,6 +22,7 @@ type Config struct {
 	Presentation string                  `toml:"presentation"`
 	Hosts        map[string]HostConfig   `toml:"hosts"`
 	Driver       string                  `toml:"driver"`
+	MainReturn   MainReturn              `toml:"main_return"`
 	MaxDepth     int                     `toml:"max_depth"`
 	Store        string                  `toml:"store"`
 	DataDir      string                  `toml:"data_dir"`
@@ -38,6 +39,11 @@ type Config struct {
 }
 
 // HostConfig names how the home host reaches a worker host over SSH.
+type MainReturn struct {
+	Surface string `toml:"surface"`
+	Thread  string `toml:"thread"`
+}
+
 type HostConfig struct {
 	SSH string `toml:"ssh"`
 }
@@ -191,6 +197,9 @@ func (c *Config) resolve(getenv Getenv) error {
 	}
 	if c.Driver != "" && !NamePattern.MatchString(c.Driver) {
 		return fault.New("invalid_config", "%s: driver %q must match %s", c.Path, c.Driver, NamePattern)
+	}
+	if (c.MainReturn.Surface != "" || c.MainReturn.Thread != "") && (c.Home != "" || c.Driver != "main" || !NamePattern.MatchString(c.MainReturn.Surface) || !NamePattern.MatchString(c.MainReturn.Thread)) {
+		return fault.New("invalid_config", "%s: main_return requires a home host with driver main and valid surface and thread", c.Path)
 	}
 	if c.MaxDepth == 0 {
 		c.MaxDepth = 3
