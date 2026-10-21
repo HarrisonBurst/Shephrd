@@ -122,9 +122,6 @@ func RecordReport(tx *store.Tx, c Caller, t *Task, r *Report) (int64, error) {
 		}
 		return seq, WakeOwner(tx, t, seq)
 	case t.Role == "worker" && r.Kind == "result":
-		if _, err := tx.Exec(`UPDATE tasks SET wake_at = NULL WHERE id = ?`, t.ID); err != nil {
-			return 0, err
-		}
 		if err := SetState(tx, c.String(), t, "done", ""); err != nil {
 			return 0, err
 		}

@@ -15,7 +15,7 @@ import (
 	"shephrd/internal/store"
 )
 
-func TestReportedWorkerDoesNotRewakeForEarlierMessage(t *testing.T) {
+func TestReportedWorkerWakesForUnreadEarlierMessage(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "shephrd.db"))
 	if err != nil {
@@ -80,24 +80,8 @@ func TestReportedWorkerDoesNotRewakeForEarlierMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	current, err := coord.Load(db, task.ID)
-	if err != nil || woken != 0 || calls != 0 || current.State != "done" {
+	if err != nil || woken != 1 || calls != 1 || current.State != "done" {
 		t.Fatalf("after reported exit: task=%+v, wakes=%d, host calls=%d, err=%v", current, woken, calls, err)
-	}
-	if err := db.Write(ctx, func(tx *store.Tx) error {
-		current, err := coord.Load(tx, task.ID)
-		if err != nil {
-			return err
-		}
-		_, err = coord.Send(tx, coord.Caller{Kind: "driver", Name: "main"}, current, "New request", 0)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.wake(ctx, x, reg, cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE task = ? AND name = 'turn.woken'`, task.ID).Scan(&woken); err != nil || woken != 1 || calls != 1 {
-		t.Fatalf("new message: wakes=%d, host calls=%d, err=%v", woken, calls, err)
 	}
 }
 

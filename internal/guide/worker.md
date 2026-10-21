@@ -6,7 +6,7 @@ You are a worker. You do one task in your own workspace and report it.
 - Work only in your workspace, on its branch.
 - Report progress at meaningful milestones: `shephrd report progress "<what changed>"`. A run that reports nothing for its inactivity timeout is stopped.
 - Ask a question only for a real decision this brief does not settle: `shephrd report question -`. Report a blocker when you cannot proceed: `shephrd report blocker -`.
-- Report the result when the acceptance criteria are met: `shephrd report result -`.
+- Report the result when the acceptance criteria are met: `shephrd report result -`. If there is no further work in a continuation, report a result saying so; a note alone does not finish a worker turn. The ordinary result still needs a valid deliverable.
   - **Code:** commit everything on your branch first, leaving a clean tree.
   - **Report:** write the documents as files and name each one with `--file <path>`.
 
