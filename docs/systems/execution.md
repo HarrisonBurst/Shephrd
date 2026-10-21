@@ -17,7 +17,7 @@ Every operation on a machine goes through that machine's **host agent**, the sam
 - On the home host, execution calls it in-process.
 - On a worker host, the home host connects over SSH with its own key, whose forced command on the worker host is `shephrd agent`. The agent accepts only host operations from the home host. Each operation is named in the SSH command with the protocol version and release, and its JSON request travels on stdin, so nothing secret appears in a process list.
 
-A worker host's agent reports its release version and the harness and presentation providers installed on it. Execution checks these before routing anything there. A host that cannot be reached makes every run on it `unknown`, never `exited`.
+A worker host's agent reports its release version and the harness and presentation providers installed on it. Execution checks these before routing anything there. Each host configures its own absolute, stable installed `cli_path`. Before advertising a host or launching a run, the agent checks that this path exists, is executable and reports the agent's release. It advertises that literal path, not its resolved store target or the home host's path. A host that cannot be reached makes every run on it `unknown`, never `exited`.
 
 ```mermaid
 sequenceDiagram
@@ -75,7 +75,7 @@ A run is one turn of one session. It starts, works until it reports a result, qu
 
 1. Coordination reserves the run generation and token.
 2. Execution writes the **brief** into the workspace: role, title, objective, acceptance, the paths of [pinned inputs](artifacts.md#passing-artifacts-on), the latest notes, and for a driver task an overview of every open request with its children and the events since its last turn, plus a pointer to the repository's context file, and how to report. Each brief is bounded in size, and longer material is referenced by commands to read it rather than included.
-3. The host agent starts `shephrd _run`, the **supervisor**, inside the chosen presentation. The supervisor starts the harness in its own process group with a clean environment: `PATH` with this Shephrd's directory first, `HOME`, the OS account's `USER`, `LOGNAME` and `TMPDIR` (harnesses find their logins through them), the host's `SHEPHRD_CONFIG` and `SHEPHRD_RUN_TOKEN`. Driver identity, terminal credentials and any parent Shephrd tokens are never passed through.
+3. The host agent starts `shephrd _run`, the **supervisor**, with its pinned `os.Executable()` path, including in a terminal presentation. The running supervisor remains that original executable for process-group ownership and exit recording. The brief and `run.json` instead carry this host's literal stable installed `cli_path`. The supervisor invokes `_started` and `_turn` through that path on each new exec; the harness receives a clean environment: `PATH` with the installed path's directory first, `HOME`, the OS account's `USER`, `LOGNAME` and `TMPDIR` (harnesses find their logins through them), the host's `SHEPHRD_CONFIG` and `SHEPHRD_RUN_TOKEN`. Driver identity, terminal credentials and any parent Shephrd tokens are never passed through. An already running supervisor keeps its process identity across activation, while subsequent commands resolve the installed path afresh.
 4. Process identity, meaning process ID with start time, and any presentation endpoint are recorded before the harness receives the brief. If the supervisor exits before recording its identity, an exit record or the bounded startup observation establishes only an exited or unknown run; execution never infers that an unrecorded process or endpoint is absent.
 
 ### Presented runs
@@ -159,7 +159,7 @@ The task's target names the harness and an opaque model string. Execution passes
 | `workspace reconcile` | Classify interrupted effects on every host |
 | `host list` | Configured hosts with reachability, version and installed providers |
 
-`shephrd agent`, `shephrd _run` and the supervisor's `_started` are private commands between Shephrd binaries of the same release, not part of the public command surface. The supervisor records its own process identity with `_started`, using its run token, before it starts the harness, so the identity is recorded even if the process that launched it dies.
+`shephrd agent` requires the same release on home and worker hosts; `shephrd _run`, `_started` and `_turn` are private commands, not public commands. An in-flight pinned supervisor may call a newer installed CLI's `_started` and `_turn` using its unchanged run token, PID/start-time and ended-turn wire semantics. This bounded in-flight contract does not permit an old CLI to read a newer store schema or permit cross-release host agents; incompatible private changes require draining runs or an explicit transition. The supervisor records its own process identity with `_started` before it starts the harness, even if its launcher dies. An unsuccessful `_turn` lookup never proves completion.
 
 ## Failure behavior
 
@@ -167,6 +167,7 @@ The task's target names the harness and an opaque model string. Execution passes
 |---|---|
 | Host unreachable | Its runs are `unknown`; resume, retry and removal on that host are refused. Starting new work there is refused. |
 | Host on a different release | Refused with `version_mismatch` before anything is created. |
+| Installed CLI path missing, non-executable or wrong release at launch | Refused without falling back to PATH or the pinned executable; existing run liveness remains recoverable. A missing path during an active run fails new commands and private lookups, not proof of an exit. |
 | Base cannot be resolved or has diverged | Workspace creation refused; the task stays as it was. |
 | Setup command fails | Workspace stays `held`; the task is `held` with reason `setup_failed`. |
 | Harness fails to start | Task `held` with reason `start_failed`; the workspace stays `held`. |

@@ -65,12 +65,13 @@ func (r *Registry) Call(ctx context.Context, p *Plugin, call Call) (json.RawMess
 	if err != nil {
 		return nil, err
 	}
+	installed, err := r.cfg.InstalledCLI()
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, exe, p.Manifest.Exec[1:]...)
 	cmd.Dir = p.Dir
-	path := call.Getenv("PATH")
-	if self, err := os.Executable(); err == nil {
-		path = filepath.Dir(self) + ":" + path
-	}
+	path := filepath.Dir(installed) + ":" + call.Getenv("PATH")
 	cmd.Env = []string{
 		"PATH=" + path,
 		"HOME=" + call.Getenv("HOME"),

@@ -88,18 +88,19 @@ A remote driver is limited by what it owns and what it has been granted, not by 
 
 - Mutations are idempotent by key, so the transport retries a forwarded request after a connection failure with the same key, a bounded number of times, then exits `3`.
 - Reads are always safe to retry. A dropped remote `inbox wait` can be restarted with its last received item ID; the home host rescans pending items under the SSH key's driver identity. Consumers deduplicate repeated IDs and acknowledge only after handling.
-- The request carries the protocol version. A mismatch is refused with `version_mismatch` naming both versions. All hosts run the same release; there are no compatibility shims.
+- The request carries the protocol version. A mismatch is refused with `version_mismatch` naming both versions. Home `serve`, client and worker `agent` must run the same release for new remote work; there are no host compatibility shims. An already running supervisor alone may use the installed CLI's bounded `_started`/`_turn` contract across activation, as specified in [execution](execution.md#commands).
 - JSON fields are a contract within a version. Additions are allowed; removals and renames need a new version.
 
 ## Configuration
 
-One TOML file per host at `~/.config/shephrd/config.toml`, overridden by `SHEPHRD_CONFIG`. Precedence is flag, then environment, then file. The only environment variables are `SHEPHRD_CONFIG`, `SHEPHRD_RUN_TOKEN` and `SHEPHRD_CALL_TOKEN`.
+One TOML file per host at `~/.config/shephrd/config.toml`, overridden by `SHEPHRD_CONFIG`. Precedence is flag, then environment, then file. The only environment variables are `SHEPHRD_CONFIG`, `SHEPHRD_RUN_TOKEN` and `SHEPHRD_CALL_TOKEN`. Set `cli_path` to this host's absolute, stable installed Shephrd executable (a symlink through an activated profile is valid), never a resolved store path. `init` cannot infer the managed installed path; configure it before starting runs or invoking plugins. A missing, non-executable or initially wrong-release path fails closed; it is never replaced by `os.Executable()` or a PATH lookup. Each host configures its own value, including a client that also runs sessions or plugins.
 
 For the [three-machine example](#example-three-machines):
 
 ```toml
 # workhorse: home host
 host = "workhorse"
+cli_path = "/home/harhsieh/.nix-profile/bin/shephrd"
 driver = "main"
 max_depth = 3
 
@@ -125,9 +126,10 @@ home = "me@workhorse"
 # laptop: worker host
 host = "laptop"
 home = "me@workhorse"
+cli_path = "/absolute/path/to/laptop/installed/bin/shephrd"
 ```
 
-On `workhorse`, `authorized_keys` pins each caller: `hermes`'s key to `shephrd serve --as driver:main`, and `laptop`'s key to `shephrd serve --host laptop`. On `laptop`, `workhorse`'s key is pinned to `shephrd agent`, so the home host can run [host operations](execution.md#hosts) there.
+On `workhorse`, `authorized_keys` pins each caller: `hermes`'s key to `shephrd serve --as driver:main`, and `laptop`'s key to `shephrd serve --host laptop`. On `laptop`, `workhorse`'s key is pinned to `shephrd agent`, so the home host can run [host operations](execution.md#hosts) there. Use each destination host's installed path in forced commands, rather than a fixed store binary or an unrelated PATH entry; after activation, restart the daemon and ensure forced commands and clients use the matching release before new remote starts.
 
 Paths for the store, workspaces and data have defaults and are set only when needed.
 
@@ -165,7 +167,7 @@ Each command's behavior is defined by the spec named in its row.
 | `<plugin-name> ...` | Subcommands added by plugins | [Plugins](extensibility.md) |
 | `skill main`, `skill subdriver`, `skill worker` | Print a role's guidance | [Guidance](skill.md) |
 
-`help` prints text help for any command. `agent`, `_run` and `_started` are private commands between Shephrd binaries of the same release, not part of this surface.
+`help` prints text help for any command. `agent`, `_run`, `_started` and `_turn` are private commands, not part of this surface. Host agents require matching releases; the limited in-flight supervisor exception is defined in [execution](execution.md#commands).
 
 The surface mailbox adds five leaf commands to the original 44. Each role uses far fewer:
 

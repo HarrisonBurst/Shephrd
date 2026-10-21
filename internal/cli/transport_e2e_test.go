@@ -28,7 +28,9 @@ func threeMachines(t *testing.T) *machines {
 	m.home.InstallHarnesses()
 	m.home.AppendConfig("[defaults]\nharness = \"codex\"\n\n[hosts.laptop]\nssh = \"me@laptop\"")
 	m.client.OK("init", "--home", "me@workhorse")
+	m.client.SetCLIPath()
 	m.laptop.OK("init", "--host", "laptop", "--home", "me@workhorse")
+	m.laptop.SetCLIPath()
 	bin := m.home.Bin
 	m.client.InstallSSH(map[string]testkit.SSHTarget{"me@workhorse": {Command: []string{bin, "serve", "--as", "driver:main"}, Home: m.home.Home}})
 	m.laptop.InstallSSH(map[string]testkit.SSHTarget{"me@workhorse": {Command: []string{bin, "serve", "--host", "laptop"}, Home: m.home.Home}})

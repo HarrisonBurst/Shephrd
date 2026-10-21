@@ -25,6 +25,7 @@ func initialized(t *testing.T) *testkit.Env {
 	if out["created"] != true || out["host"] != "workhorse" {
 		t.Fatalf("init: %v", out)
 	}
+	env.SetCLIPath()
 	return env
 }
 

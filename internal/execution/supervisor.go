@@ -51,7 +51,7 @@ func BriefPath(runDir string) string { return filepath.Join(runDir, "brief.md") 
 
 // Launch starts the supervisor for a prepared run in its own session, so
 // the supervisor and the harness form one process group.
-func Launch(runDir string, spec RunSpec, token string) (proc.Identity, error) {
+func Launch(runDir, supervisor string, spec RunSpec, token string) (proc.Identity, error) {
 	body, err := json.Marshal(spec)
 	if err != nil {
 		return proc.Identity{}, err
@@ -69,7 +69,7 @@ func Launch(runDir string, spec RunSpec, token string) (proc.Identity, error) {
 		return proc.Identity{}, err
 	}
 	defer supervisorLog.Close()
-	cmd := exec.Command(spec.Shephrd, "_run", runDir)
+	cmd := exec.Command(supervisor, "_run", runDir)
 	cmd.Env = spec.environment(token)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, supervisorLog, supervisorLog
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
