@@ -95,6 +95,36 @@ func TestWorkerRunsInItsOwnWorkspaceAndReports(t *testing.T) {
 	}
 }
 
+func TestWorkerNoWorkContinuationResealsResultAndFinishesDone(t *testing.T) {
+	env, _ := withHarness(t)
+	env.Script(map[string][][]action{"t_1": {
+		{{"work": "Initial work"}, {"report": []string{"result", "Initial result"}}},
+		{{"report": []string{"result", "No further result; the original commit is unchanged"}}},
+		{{"report": []string{"result", "Still no further result"}}},
+	}})
+	env.OK("task", "create", "--repo", "api", "--objective", "Build")
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_1", "done")
+	first := env.OK("task", "show", "t_1")["artifact"].(map[string]any)
+	env.OK("task", "send", "t_1", "Check the existing work")
+	env.StartDaemon()
+	env.Eventually("the no-work continuation", func() bool { return len(callsFor(env, "t_1", 1)) == 1 })
+	env.WaitState("t_1", "done")
+	second := env.OK("task", "show", "t_1")["artifact"].(map[string]any)
+	if second["id"] == first["id"] || second["commit"] != first["commit"] || second["text"] != "No further result; the original commit is unchanged" {
+		t.Fatalf("continuation did not seal a new validated result: first=%v, second=%v", first, second)
+	}
+	if errors := commandErrors(env, "t_1"); len(errors) != 0 {
+		t.Fatalf("report errors: %v", errors)
+	}
+	if brief := callsFor(env, "t_1", 1)[0]["brief"].(string); !strings.Contains(brief, "If there is no further work in a continuation, report a result") {
+		t.Fatalf("continuation guidance missing: %s", brief)
+	}
+	env.OK("task", "send", "t_1", "One more question")
+	env.Eventually("a new post-result message to get a turn", func() bool { return len(callsFor(env, "t_1", 2)) == 1 })
+	env.WaitState("t_1", "done")
+}
+
 func TestWorkerQuestionWaits(t *testing.T) {
 	env, _ := withHarness(t)
 	env.Script(map[string][][]action{"t_1": {{{"report": []string{"question", "Which API version?"}}}}})

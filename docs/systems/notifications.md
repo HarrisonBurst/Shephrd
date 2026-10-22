@@ -61,7 +61,7 @@ Going down, `task send <task> <text> [--reply-to <seq>]` records a `message`, or
 
 The daemon starts continuation turns through session execution, under coordination's `task.start` gate:
 
-- **A worker** that is `waiting` or `done` gets a turn when its owner sends it a reply or message.
+- **A worker** gets a continuation turn for an owner message or reply, including one sent while its current run is still active. Reporting a result does not consume a pending wake: the worker may not have read the message, so it is included in the next run's brief after the reported run exits. The exit itself does not create a wake. A message sent after the result also schedules a turn. Every worker continuation finishes with an ordinary validated result, question or blocker, not a note alone. If the message needs no further work, the worker reports that explicitly as a result; the deliverable is sealed again, and the task returns to `done`.
 - **A driver task** gets a turn when it has anything new: a request, a reply, or a wake-worthy event from a child. If a turn is already running, new events wait and appear in the next turn's brief.
 - **Coalescing:** the daemon waits a short settle window, 5 seconds by default, before starting a driver turn, so several children finishing together are handled in one turn.
 - A task that is `held`, or whose owner stopped it, gets no automatic turns. Events still accumulate for when it resumes.

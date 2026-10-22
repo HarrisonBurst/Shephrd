@@ -32,7 +32,7 @@ When a session reports a result, the artifact is checked and sealed in the same 
 - **Report:** each named file must be a regular file inside the workspace. Shephrd copies it to the home host's content-addressed artifact store, records its digest and size, and makes the copy read-only. Snapshots have a configurable size limit.
 - **Answer:** the result text is the artifact.
 
-A sealed artifact never changes. If the task is reopened by a message and reports again, the new result seals a new artifact, and only the latest counts as current.
+A sealed artifact never changes. If the task is reopened by a message, including one sent during the prior run, its continuation must report an ordinary validated result even when no more work is needed. The new result seals a new artifact (which may name the same code commit), and only the latest counts as current. A note alone does not complete the worker turn or preserve the previous artifact as current.
 
 A driver task's result automatically lists the current artifacts of the request's children, alongside their states, so the owner sees what was produced without the driver restating it.
 
