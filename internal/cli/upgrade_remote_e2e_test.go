@@ -1,15 +1,14 @@
 package cli_test
 
 import (
-	"context"
-	"io"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"shephrd/internal/cli"
-	"shephrd/internal/fault"
 	"shephrd/internal/testkit"
 )
 
@@ -40,14 +39,14 @@ func TestUpgradedWorkerUsesItsOwnProfileAndMatchingAgent(t *testing.T) {
 		t.Fatalf("remote run used another host's path: %v", call)
 	}
 	token := envOf(call)["SHEPHRD_RUN_TOKEN"]
-	getenv := func(key string) string {
-		if key == "HOME" {
-			return m.home.Home
-		}
-		return ""
+	req, err := json.Marshal(cli.Request{V: cli.Protocol, Argv: []string{"report", "progress", "stolen"}, Key: "stolen", RunToken: token})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := cli.Dispatch(context.Background(), cli.Origin{Host: "elsewhere"}, cli.Request{V: cli.Protocol, Argv: []string{"report", "progress", "stolen"}, Key: "stolen", RunToken: token}, getenv, io.Discard); fault.As(err).Kind != "invalid_token" {
-		t.Fatalf("wrong host accepted token: %v", err)
+	cmd := exec.Command(v2, "serve", "--host", "elsewhere")
+	cmd.Env = []string{"HOME=" + m.home.Home, "SSH_ORIGINAL_COMMAND=" + string(req)}
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), `"kind":"invalid_token"`) {
+		t.Fatalf("wrong host accepted token: %v, %s", err, out)
 	}
 	m.laptop.Bin = v2
 	if err := os.WriteFile(filepath.Join(m.laptop.Home, ".fakeharness", "upgrade"), nil, 0o600); err != nil {

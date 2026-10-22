@@ -45,7 +45,7 @@ func upgradeBinaries(t *testing.T) (string, string) {
 			if entry.IsDir() {
 				return os.MkdirAll(filepath.Join(legacy, rel), 0o755)
 			}
-			if strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, "0002_landing_delta.sql") {
+			if strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
 			body, err := os.ReadFile(path)
@@ -59,12 +59,6 @@ func upgradeBinaries(t *testing.T) (string, string) {
 		}
 	}
 	migrations := filepath.Join(legacy, "internal", "store", "migrations")
-	base := filepath.Join(migrations, "0001_init.sql")
-	first := mustRead(t, base)
-	current := mustRead(t, filepath.Join(root, "internal", "store", "migrations", "0002_landing_delta.sql"))
-	if err := os.WriteFile(base, []byte(first+"\n"+current), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	bins := t.TempDir()
 	build := func(src, release string) string {
 		path := filepath.Join(bins, release, "shephrd")
@@ -79,7 +73,7 @@ func upgradeBinaries(t *testing.T) (string, string) {
 		return path
 	}
 	v1 := build(legacy, "fixture-v1")
-	if err := os.WriteFile(filepath.Join(migrations, "0002_upgrade_probe.sql"), []byte("ALTER TABLE landings ADD COLUMN upgrade_probe TEXT NOT NULL DEFAULT '';\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(migrations, "0006_upgrade_probe.sql"), []byte("ALTER TABLE landings ADD COLUMN upgrade_probe TEXT NOT NULL DEFAULT '';\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return v1, build(legacy, "fixture-v2")
@@ -162,8 +156,8 @@ func TestActiveRunSurvivesStoreMigration(t *testing.T) {
 			env.Eventually("v1 progress from active harness", func() bool {
 				return len(env.Calls()) >= 2 && env.Task("t_1")["state"] == "running"
 			})
-			if migrationVersion(t, env) != 1 {
-				t.Fatal("v1 migrated beyond its schema")
+			if migrationVersion(t, env) != 5 {
+				t.Fatal("v1 migration chain is incomplete")
 			}
 			var spec struct {
 				Shephrd string `json:"shephrd"`
@@ -192,9 +186,9 @@ func TestActiveRunSurvivesStoreMigration(t *testing.T) {
 			stop()
 			installRelease(t, env, v2)
 			env.Bin = v2
-			env.StartDaemon()
 			env.OK("task", "show", "t_1")
-			if migrationVersion(t, env) != 2 {
+			env.StartDaemon()
+			if migrationVersion(t, env) != 6 {
 				t.Fatal("v2 did not migrate the store")
 			}
 			old := env.Bin
