@@ -37,6 +37,11 @@ func isAncestor(repo, ancestor, descendant string) bool {
 	return err == nil
 }
 
+type TipRequest struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+}
+
 type LandRequest struct {
 	Repo    string `json:"repo"`
 	Branch  string `json:"branch"`

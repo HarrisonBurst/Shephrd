@@ -1,0 +1,1 @@
+ALTER TABLE landings ADD COLUMN effective_base TEXT NOT NULL DEFAULT '';

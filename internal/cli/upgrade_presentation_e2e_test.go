@@ -37,7 +37,7 @@ func TestPresentedSupervisorFinishesThroughInstalledCLI(t *testing.T) {
 	env.Bin = v2
 	env.OK("task", "show", "t_1")
 	env.StartDaemon()
-	if migrationVersion(t, env) != 6 {
+	if migrationVersion(t, env) != 7 {
 		t.Fatal("presented migration did not apply")
 	}
 	if err := os.WriteFile(filepath.Join(env.Home, ".fakeharness", "upgrade"), nil, 0o600); err != nil {
