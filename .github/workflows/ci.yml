@@ -28,6 +28,14 @@ jobs:
           node-version: '24'
       - run: make test-docs
       - run: make test
+        env:
+          SHEPHRD_TEST_DIAGNOSTICS: ${{ runner.temp }}/shephrd-subdriver-diagnostic
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: subdriver-diagnostic-${{ matrix.os }}-${{ github.event_name }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/shephrd-subdriver-diagnostic/
       - run: make test-extension
       - run: go vet ./...
       - run: git diff --check
