@@ -36,6 +36,7 @@ type forgeRequest struct {
 	BodyExplicit  bool   `json:"body_explicit"`
 	Draft         bool   `json:"draft"`
 	DraftExplicit bool   `json:"draft_explicit"`
+	RequireNew    bool   `json:"require_new"`
 }
 
 type response struct {
@@ -140,6 +141,9 @@ func handle(req forgeRequest, method string) (response, error) {
 				return response{}, fmt.Errorf("multiple open pull requests for branch %s", req.Branch)
 			}
 			if len(open) == 1 {
+				if req.RequireNew {
+					return response{}, fmt.Errorf("pull request %d has no recorded publication for this task", open[0].Number)
+				}
 				number = fmt.Sprint(open[0].Number)
 			}
 		}
