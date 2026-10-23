@@ -280,7 +280,7 @@ func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coor
 		Spec: RunSpec{Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness, Interactive: interactive, Label: label},
 	}, &launched)
 	if err != nil {
-		return fail(err)
+		return nil, fault.New("start_failed", "%v", err).WithNext("workspace", "reconcile")
 	}
 	err = x.write(ctx, func(tx *store.Tx) error {
 		if launched.Endpoint != "" {
@@ -639,7 +639,7 @@ func (x *Executor) Abandon(ctx context.Context, t *coord.Task) (*coord.Run, erro
 	if err != nil {
 		return nil, err
 	}
-	if r == nil || t.State != "held" || r.Liveness != "unknown" || r.PID != 0 || r.Endpoint == "" {
+	if r == nil || t.State != "held" || r.Liveness != "unknown" || r.PID != 0 {
 		return r, fault.New("abandon_unconfirmed", "%s has no held PID-less unknown presentation run to abandon", t.Ref).WithNext("task", "show", t.Ref)
 	}
 	attempt, err := coord.LoadAttempt(x.DB, t.ID, t.Attempt)
@@ -653,16 +653,23 @@ func (x *Executor) Abandon(ctx context.Context, t *coord.Task) (*coord.Run, erro
 	if err != nil {
 		return r, err
 	}
-	var shown PresentationResponse
-	if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: r.Endpoint}, &shown); err != nil || shown.State != "absent" {
-		return r, fault.New("abandon_unconfirmed", "%s presentation endpoint is not proven absent", t.Ref).WithNext("workspace", "reconcile")
-	}
 	var exit ExitResponse
 	if err := host.Call(ctx, "exit_record", RunDirRequest{RunDir: r.Dir}, &exit); err != nil {
 		return r, err
 	}
 	if exit.Found || !exit.Present {
 		return r, fault.New("abandon_unconfirmed", "%s run directory has exit evidence or is absent", t.Ref).WithNext("workspace", "reconcile")
+	}
+	endpoint := r.Endpoint
+	if endpoint == "" {
+		endpoint = exit.Endpoint
+	}
+	if endpoint == "" || (exit.Endpoint != "" && exit.Endpoint != endpoint) {
+		return r, fault.New("abandon_unconfirmed", "%s presentation endpoint is not proven", t.Ref).WithNext("workspace", "reconcile")
+	}
+	var shown PresentationResponse
+	if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: endpoint}, &shown); err != nil || shown.State != "absent" {
+		return r, fault.New("abandon_unconfirmed", "%s presentation endpoint is not proven absent", t.Ref).WithNext("workspace", "reconcile")
 	}
 	err = x.write(ctx, func(tx *store.Tx) error {
 		currentTask, err := coord.Load(tx, t.ID)
@@ -683,10 +690,10 @@ func (x *Executor) Abandon(ctx context.Context, t *coord.Task) (*coord.Run, erro
 		if currentAttempt.WorkspaceState != "held" {
 			return fault.New("abandon_stale", "%s workspace changed while it was being checked", t.Ref)
 		}
-		if _, err := tx.Exec(`UPDATE runs SET stop_reason = 'abandoned' WHERE id = ?`, current.ID); err != nil {
+		if _, err := tx.Exec(`UPDATE runs SET stop_reason = 'abandoned', endpoint = ? WHERE id = ?`, endpoint, current.ID); err != nil {
 			return err
 		}
-		current.StopReason = "abandoned"
+		current.StopReason, current.Endpoint = "abandoned", endpoint
 		err = coord.RecordExit(tx, current, -1, "")
 		return err
 	})

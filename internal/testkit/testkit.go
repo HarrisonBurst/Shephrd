@@ -241,6 +241,13 @@ func (e *Env) SSHDropOnce(target string) {
 	os.WriteFile(filepath.Join(e.Home, ".fakessh", "drop", target), nil, 0o600)
 }
 
+func (e *Env) SSHDropOperation(target, op string) {
+	e.t.Helper()
+	if err := os.WriteFile(filepath.Join(e.Home, ".fakessh", "drop", target), []byte(op), 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 // InstallHarnesses puts the fake harness on PATH as claude, codex and pi.
 func (e *Env) InstallHarnesses() {
 	e.t.Helper()

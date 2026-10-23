@@ -156,11 +156,11 @@ func handle(req request) (map[string]string, error) {
 			return nil, fmt.Errorf("herdr tab create returned no pane: %s", out)
 		}
 		at = endpoint{Tab: created.Result.Tab.ID, Pane: created.Result.RootPane.ID}
-		if _, _, err := herdr("pane", "run", at.Pane, req.Body.Command); err != nil {
-			return nil, err
-		}
 		encoded, _ := json.Marshal(at)
 		return map[string]string{"endpoint": string(encoded)}, nil
+	case "run":
+		_, _, err := herdr("pane", "run", at.Pane, req.Body.Command)
+		return map[string]string{}, err
 	case "probe":
 		return map[string]string{"state": paneState(at)}, nil
 	case "focus":

@@ -49,9 +49,14 @@ func main() {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	err := cmd.Run()
 	drop := filepath.Join(dir, "drop", name)
-	if _, statErr := os.Stat(drop); statErr == nil {
-		os.Remove(drop)
-		fail("Connection to " + name + " closed by remote host.")
+	if wanted, statErr := os.ReadFile(drop); statErr == nil {
+		var header struct {
+			Op string `json:"op"`
+		}
+		if len(wanted) == 0 || json.Unmarshal([]byte(command), &header) == nil && header.Op == string(wanted) {
+			os.Remove(drop)
+			fail("Connection to " + name + " closed by remote host.")
+		}
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {

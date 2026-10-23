@@ -50,9 +50,10 @@ type (
 		Truncated bool   `json:"truncated"`
 	}
 	ExitResponse struct {
-		Record  ExitRecord `json:"record"`
-		Found   bool       `json:"found"`
-		Present bool       `json:"present"`
+		Record   ExitRecord `json:"record"`
+		Found    bool       `json:"found"`
+		Present  bool       `json:"present"`
+		Endpoint string     `json:"endpoint,omitempty"`
 	}
 	StopRequest struct {
 		PGID  int    `json:"pgid"`
@@ -255,7 +256,11 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 				record.Session = codexSession(LogPath(req.RunDir))
 			}
 		}
-		return ExitResponse{Record: record, Found: found, Present: presentErr == nil}, nil
+		endpoint, err := os.ReadFile(endpointPath(req.RunDir))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+		return ExitResponse{Record: record, Found: found, Present: presentErr == nil, Endpoint: string(endpoint)}, nil
 	case "read_log":
 		req, err := decode[RunDirRequest](body)
 		if err != nil {

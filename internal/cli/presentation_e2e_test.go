@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -75,6 +76,114 @@ func waitStateFromDaemon(t *testing.T, env *testkit.Env, ref, state string) map[
 		return log.JSON(t)["run"].(map[string]any)["liveness"] == "exited"
 	})
 	return task
+}
+
+func ageRun(t *testing.T, env *testkit.Env, run map[string]any) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(env.Home, ".local", "state", "shephrd", "shephrd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE runs SET started_at = ? WHERE id = ?`, "2020-01-01T00:00:00.000000000Z", run["run"]); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInterruptedPresentationBeforeSupervisorIdentity(t *testing.T) {
+	env := withHerdr(t)
+	dir := filepath.Join(env.Home, ".fakeherdr")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pause := filepath.Join(dir, "pause-before-run")
+	if err := os.WriteFile(pause, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "exit-before-supervisor"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env.OK("task", "create", "--repo", "api", "--objective", "Work")
+	cmd := exec.Command(env.Bin, "task", "start", "t_1")
+	cmd.Env = []string{"HOME=" + env.Home, "PATH=" + strings.Join(env.Path, ":") + ":" + os.Getenv("PATH"), "USER=" + os.Getenv("USER")}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if cmd.ProcessState == nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+		}
+	}()
+	env.Eventually("the new pane to wait before supervisor exec", func() bool { return len(herdrPanes(env)) == 1 })
+	env.Eventually("the endpoint to be durable before supervisor exec", func() bool {
+		body, err := os.ReadFile(filepath.Join(env.Home, ".local", "share", "shephrd", "runs", "t_1", "1", "endpoint"))
+		return err == nil && len(body) > 0
+	})
+	cmd.Process.Kill()
+	cmd.Wait()
+	os.Remove(pause)
+	env.Eventually("the shell to exit without a supervisor", func() bool { return herdrPanes(env)[0]["closed"] == true })
+	run := env.OK("task", "log", "t_1")["run"].(map[string]any)
+	if run["liveness"] != "starting" || run["pid"] != nil || run["endpoint"] != nil || run["exit_status"] != nil {
+		t.Fatalf("interrupted run: %v", run)
+	}
+	ageRun(t, env, run)
+	env.OK("workspace", "reconcile")
+	if task := env.Task("t_1"); task["state"] != "held" || task["reason"] != "start_failed" {
+		t.Fatalf("task after reconciliation: %v", task)
+	}
+	if current := env.OK("task", "log", "t_1")["run"].(map[string]any); current["liveness"] != "unknown" {
+		t.Fatalf("run after reconciliation: %v", current)
+	}
+	env.Refused("liveness_unknown", "task", "resume", "t_1")
+	env.Refused("liveness_unknown", "task", "retry", "t_1")
+	env.OK("task", "stop", "t_1", "--abandon")
+	if current := env.OK("task", "log", "t_1")["run"].(map[string]any); current["liveness"] != "exited" || current["stop_reason"] != "abandoned" {
+		t.Fatalf("abandoned run: %v", current)
+	}
+	if task := env.Task("t_1"); task["state"] != "held" {
+		t.Fatalf("abandoned task: %v", task)
+	}
+}
+
+func TestInterruptedPIDLessPresentationStartCanBeAbandoned(t *testing.T) {
+	m := threeMachines(t)
+	m.laptop.InstallHarnesses()
+	installHerdr(t, m.laptop)
+	m.home.Path = append([]string{filepath.Join(m.laptop.Home, "herdrbin")}, m.home.Path...)
+	m.home.OK("repo", "add", testkit.GitRepo(t, "api"), "--host", "laptop")
+	marker := filepath.Join(m.laptop.Home, ".fakeherdr", "exit-before-supervisor")
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.home.OK("task", "create", "--repo", "api", "--objective", "Work")
+	m.home.SSHDropOperation("me@laptop", "launch")
+	m.home.Refused("start_failed", "task", "start", "t_1")
+	run := m.home.OK("task", "log", "t_1")["run"].(map[string]any)
+	if run["pid"] != nil || run["endpoint"] != nil || run["exit_status"] != nil || len(herdrPanes(m.laptop)) != 1 {
+		t.Fatalf("interrupted launch: %v; panes: %v", run, herdrPanes(m.laptop))
+	}
+	ageRun(t, m.home, run)
+	m.home.OK("workspace", "reconcile")
+	if task := m.home.Task("t_1"); task["state"] != "held" || task["reason"] != "start_failed" {
+		t.Fatalf("task after reconciliation: %v", task)
+	}
+	if current := m.home.OK("task", "log", "t_1")["run"].(map[string]any); current["liveness"] != "unknown" {
+		t.Fatalf("run after reconciliation: %v", current)
+	}
+	m.home.Refused("liveness_unknown", "task", "resume", "t_1")
+	m.home.Refused("liveness_unknown", "task", "retry", "t_1")
+	m.home.OK("task", "stop", "t_1", "--abandon")
+	if current := m.home.OK("task", "log", "t_1")["run"].(map[string]any); current["liveness"] != "exited" || current["stop_reason"] != "abandoned" {
+		t.Fatalf("abandoned run: %v", current)
+	}
+	if task := m.home.Task("t_1"); task["state"] != "held" {
+		t.Fatalf("abandoned task: %v", task)
+	}
 }
 
 func TestSessionsRunInAPresentation(t *testing.T) {
