@@ -65,6 +65,12 @@ func main() {
 				break
 			}
 		}
+		if _, err := os.Stat(filepath.Join(dir, "exit-before-supervisor")); err == nil {
+			p.Closed = true
+			p.Runs++
+			save(panes)
+			break
+		}
 		cmd := exec.Command("sh", "-c", strings.Join(args[3:], " "))
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		log, _ := os.OpenFile(filepath.Join(dir, p.ID+".log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)

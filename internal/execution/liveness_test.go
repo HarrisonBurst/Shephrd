@@ -281,6 +281,39 @@ func TestAbandonUnstartedPresentationRun(t *testing.T) {
 	}
 }
 
+func TestAbandonRefusesUnprovenPresentationStarts(t *testing.T) {
+	for _, tc := range []struct {
+		name, recorded, onHost, state string
+		pid, found, present           bool
+	}{
+		{name: "no endpoint", state: "absent", present: true},
+		{name: "endpoint mismatch", recorded: "ep1", onHost: "ep2", state: "absent", present: true},
+		{name: "endpoint present", onHost: "ep", state: "present", present: true},
+		{name: "endpoint uncertain", onHost: "ep", state: "uncertain", present: true},
+		{name: "exit record", onHost: "ep", state: "absent", found: true, present: true},
+		{name: "run directory missing", onHost: "ep", state: "absent"},
+		{name: "process identity recorded", onHost: "ep", state: "absent", pid: true, present: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host := &livenessHost{presentation: tc.state, exit: ExitResponse{Endpoint: tc.onHost, Found: tc.found, Present: tc.present}}
+			db, x, task, run := livenessFixture(t, host, tc.pid, "running")
+			if _, err := db.Exec(`UPDATE runs SET liveness = 'unknown', endpoint = ? WHERE id = ?`, tc.recorded, run.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`UPDATE tasks SET state = 'held', reason = 'start_failed' WHERE id = ?`, task.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := x.Abandon(context.Background(), task); fault.As(err).Kind != "abandon_unconfirmed" {
+				t.Fatalf("abandon: %v", err)
+			}
+			current, err := coord.LoadRun(db, run.ID)
+			if err != nil || current.Liveness != "unknown" || current.ExitStatus != nil || current.StopReason != "" {
+				t.Fatalf("run after refusal: %+v, %v", current, err)
+			}
+		})
+	}
+}
+
 func TestHostUnknownDoesNotWakeDoneTask(t *testing.T) {
 	host := &livenessHost{probeErr: true}
 	db, x, task, run := livenessFixture(t, host, true, "done")

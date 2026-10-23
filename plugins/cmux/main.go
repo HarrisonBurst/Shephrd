@@ -88,11 +88,10 @@ func handle(req request) (map[string]string, error) {
 		if err := json.Unmarshal(out, &at); err != nil || at.Workspace == "" || at.Surface == "" {
 			return nil, fmt.Errorf("cmux workspace create returned no surface: %s", out)
 		}
-		if err := run(at, req.Body.Command); err != nil {
-			return nil, err
-		}
 		encoded, _ := json.Marshal(at)
 		return map[string]string{"endpoint": string(encoded)}, nil
+	case "run":
+		return map[string]string{}, run(at, req.Body.Command)
 	case "probe":
 		return map[string]string{"state": workspaceState(at)}, nil
 	case "focus":

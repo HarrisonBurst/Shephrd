@@ -33,7 +33,8 @@ type PresentationResponse struct {
 	State    string `json:"state,omitempty"`
 }
 
-func tokenPath(runDir string) string { return filepath.Join(runDir, "token") }
+func tokenPath(runDir string) string    { return filepath.Join(runDir, "token") }
+func endpointPath(runDir string) string { return filepath.Join(runDir, "endpoint") }
 
 // present starts the supervisor inside a terminal from the host's
 // presentation provider. The run token waits in a private file the
@@ -50,12 +51,16 @@ func present(ctx context.Context, env HostEnv, req LaunchRequest) (string, error
 		return "", err
 	}
 	command := "clear; exec " + shellQuote(env.Self) + " _run " + shellQuote(req.RunDir)
-	resp, err := presentation(ctx, env, PresentationRequest{Operation: "open", Title: req.Title, Command: command, Workspace: req.Spec.Workspace})
+	resp, err := presentation(ctx, env, PresentationRequest{Operation: "open", Title: req.Title, Workspace: req.Spec.Workspace})
 	if err != nil {
 		os.Remove(tokenPath(req.RunDir))
 		return "", err
 	}
-	return resp.Endpoint, nil
+	if err := os.WriteFile(endpointPath(req.RunDir), []byte(resp.Endpoint), 0o600); err != nil {
+		return "", err
+	}
+	_, err = presentation(ctx, env, PresentationRequest{Operation: "run", Command: command, Endpoint: resp.Endpoint})
+	return resp.Endpoint, err
 }
 
 func presentation(ctx context.Context, env HostEnv, req PresentationRequest) (PresentationResponse, error) {
