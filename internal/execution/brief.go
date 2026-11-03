@@ -130,11 +130,11 @@ func renderBrief(in briefInput) string {
 func deliverableHint(t *coord.Task, a *coord.Attempt) string {
 	switch {
 	case t.Role == "driver":
-		return "Report each request's result with `shephrd report result - --request <seq>`."
+		return "Send interim owner updates with `shephrd report notify - [--request <seq>]` without answering the request. Report each request's final result with `shephrd report result - --request <seq>`."
 	case t.Deliverable == "code":
-		return fmt.Sprintf("Commit your work on `%s` and leave a clean tree before `shephrd report result`.", a.Branch)
+		return fmt.Sprintf("Use `shephrd report notify -` for interim owner updates. Commit your work on `%s` and leave a clean tree before `shephrd report result`.", a.Branch)
 	default:
-		return "Write the report as files and name each with `--file <path>` on `shephrd report result`."
+		return "Use `shephrd report notify -` for interim owner updates. Write the report as files and name each with `--file <path>` on `shephrd report result`."
 	}
 }
 

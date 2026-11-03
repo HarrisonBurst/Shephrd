@@ -99,6 +99,7 @@ A sub-driver coordinates one repository, or general work for a general sub-drive
   - Explicitly review and accept its own report and answer children without a grant. For code children, verify a merge before closure or invoke `task accept` to land only with a `land` grant; publishing a pull request leaves the child open until proven merged. A parent result is evidence, not child closure. Keep active or waiting children under supervision, escalating questions upstream as needed. Obsolete unmerged code stays open unless proven merged or individually approved for discard. Never auto-close a child as superseded.
   - Do not ask the main driver to accept a grandchild: the main driver accepts only this sub-driver's parent task after all its children close.
 - **Handle `dependency.changed`** by telling the affected worker to rebase.
+- **Notify without finishing a request.** Use `report notify - [--request <seq>]` for an interim deliverable, an FYI escalation or a nonblocking decision that the owner should see now. Name a request only when the update belongs to it; unscoped notifications remain unscoped even with several open requests. Do not use a final result or blocking question to convey an interim update. Keep routine progress quiet with `report progress`.
 - **Return per request.** Report a result with a summary as soon as a request is finished. Its workers' artifacts are attached automatically. If a child later needs a decision or the answer needs revision, use `report question|result --request <seq>` to follow up explicitly on the answered request that child serves, then respond to the owner's reply. With no open request, omitting `--request` is refused; do not attribute unrelated work to a historical request or assume a follow-up accepts or closes a child.
 - **Nested sub-drivers** use this same skill. A sub-driver that delegates to another sub-driver supervises it as it would a worker.
 
@@ -108,7 +109,7 @@ A worker does one task in its own workspace and reports it.
 
 - Read the brief, the repository's `AGENTS.md` or `CLAUDE.md`, and any pinned inputs it lists.
 - Work only in the workspace, on its branch.
-- **Report progress** at meaningful milestones. A run that reports nothing for its inactivity timeout is stopped.
+- **Report progress** at meaningful milestones without notifying the owner. Use `report notify -` when an interim deliverable or FYI needs the owner's attention while you keep working; it does not finish the turn or replace the final result. A run that reports nothing for its inactivity timeout is stopped.
 - **Ask a question** only for a real decision the brief does not settle. **Report a blocker** when it cannot proceed.
 - **Report the result** when the acceptance criteria are met:
   - **Code:** everything committed on the branch, with a clean tree.

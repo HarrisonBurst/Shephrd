@@ -12,7 +12,7 @@ const (
 	MaxReportNote = 4 << 10
 )
 
-var ReportKinds = []string{"progress", "question", "result", "blocker", "note"}
+var ReportKinds = []string{"progress", "notify", "question", "result", "blocker", "note"}
 
 type Report struct {
 	Kind    string
@@ -21,14 +21,13 @@ type Report struct {
 	Extra   map[string]any
 }
 
-// ReportTarget checks that a report can be made and resolves the request a
-// driver's question or result answers.
+// ReportTarget checks a report and resolves or validates its request.
 func ReportTarget(q Querier, c Caller, r *Report) (*Task, error) {
 	if c.Kind != "run" {
 		return nil, fault.New("not_a_run", "only a session Shephrd started reports, with its run token")
 	}
 	if !slices.Contains(ReportKinds, r.Kind) {
-		return nil, fault.New("usage", "report kinds are progress, question, result, blocker and note")
+		return nil, fault.New("usage", "report kinds are progress, notify, question, result, blocker and note")
 	}
 	limit := MaxReport
 	if r.Kind == "note" {
@@ -47,10 +46,13 @@ func ReportTarget(q Querier, c Caller, r *Report) (*Task, error) {
 	if t.State != "running" {
 		return nil, fault.New("not_running", "%s is %s; reports are accepted only while it runs", t.Ref, t.State)
 	}
-	if t.Role != "driver" || (r.Kind != "question" && r.Kind != "result") {
+	if t.Role != "driver" || (r.Kind != "notify" && r.Kind != "question" && r.Kind != "result") {
 		if r.Request != 0 {
-			return nil, fault.New("usage", "--request is for a driver's question or result")
+			return nil, fault.New("usage", "--request is for a driver's notify, question or result")
 		}
+		return t, nil
+	}
+	if r.Kind == "notify" && r.Request == 0 {
 		return t, nil
 	}
 	requests, err := Requests(q, t.ID)
@@ -70,6 +72,8 @@ func ReportTarget(q Querier, c Caller, r *Report) (*Task, error) {
 	switch {
 	case r.Request != 0 && !known:
 		return nil, fault.New("invalid_request", "%d is not a request on %s", r.Request, t.Ref)
+	case r.Kind == "notify":
+		return t, nil
 	case r.Request == 0 && len(open) == 1:
 		r.Request = open[0]
 	case r.Request == 0:
@@ -104,7 +108,7 @@ func RecordReport(tx *store.Tx, c Caller, t *Task, r *Report) (int64, error) {
 		return 0, err
 	}
 	now := store.Timestamp(tx.Now)
-	if r.Kind == "progress" || t.Role == "worker" && r.Kind == "note" {
+	if r.Kind == "progress" || r.Kind == "notify" || t.Role == "worker" && r.Kind == "note" {
 		_, err = tx.Exec(`UPDATE runs SET last_activity = ? WHERE id = ?`, now, c.Run)
 	} else {
 		endsTurn := t.Role == "worker" || r.Kind == "note" || r.Kind == "blocker"
@@ -114,6 +118,8 @@ func RecordReport(tx *store.Tx, c Caller, t *Task, r *Report) (int64, error) {
 		return 0, err
 	}
 	switch {
+	case r.Kind == "notify":
+		return seq, WakeOwner(tx, t, seq)
 	case r.Kind == "blocker":
 		return seq, Hold(tx, t, "blocked")
 	case t.Role == "worker" && r.Kind == "question":

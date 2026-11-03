@@ -139,6 +139,130 @@ func TestSubDriverLoopEndsInTheMainDriversInbox(t *testing.T) {
 	}
 }
 
+func TestInterimNotifyReachesOwnerWithoutFinishingWork(t *testing.T) {
+	env, _ := withDaemon(t)
+	env.Script(map[string][][]action{"t_1": {{{"report": []string{"progress", "Still working"}}, {"report": []string{"notify", "Preview is ready; final review is pending"}}, {"shephrd": []string{"_turn"}}, {"report": []string{"notify", "Invalid target", "--request", "1"}}, {"wait": "finish"}, {"work": "Finished"}, {"report": []string{"result", "Final review complete"}}}}})
+	env.OK("task", "create", "--repo", "api", "--objective", "Review")
+	env.OK("task", "start", "t_1")
+	env.Eventually("interim owner item", func() bool { return len(env.OK("inbox")["items"].([]any)) == 1 })
+	if task := env.Task("t_1"); task["state"] != "running" {
+		t.Fatalf("interim report finished worker: %v", task)
+	}
+	if brief := callsFor(env, "t_1", 0)[0]["brief"].(string); !strings.Contains(brief, "report notify -") {
+		t.Fatalf("worker brief omitted interim guidance: %s", brief)
+	}
+	os.WriteFile(filepath.Join(env.Home, ".fakeharness", "finish"), nil, 0o600)
+	env.WaitState("t_1", "done")
+	if errs := commandErrors(env, "t_1"); len(errs) != 1 || !strings.Contains(errs[0], `"kind":"usage"`) {
+		t.Fatalf("worker request target should be refused: %v", errs)
+	}
+	var turn map[string]any
+	for _, call := range env.Calls() {
+		if cmd, ok := call["command"].([]any); ok && len(cmd) > 1 && cmd[1] == "_turn" {
+			turn = call
+		}
+	}
+	if turn == nil || !strings.Contains(turn["stdout"].(string), `"ended":false`) {
+		t.Fatalf("interim report ended the turn: %v", turn)
+	}
+	items := env.OK("inbox")["items"].([]any)
+	if len(items) != 2 || items[0].(map[string]any)["event"].(map[string]any)["name"] != "task.notify" ||
+		items[1].(map[string]any)["event"].(map[string]any)["name"] != "task.result" {
+		t.Fatalf("progress should stay quiet; interim report and final result should notify: %v", items)
+	}
+}
+
+func TestDriverNotifiesWithSeveralOpenRequests(t *testing.T) {
+	env, _ := withDaemon(t)
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")
+	first := strconv.Itoa(int(env.OK("task", "show", "t_1")["requests"].([]any)[0].(map[string]any)["seq"].(float64)))
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Foreign")
+	foreign := strconv.Itoa(int(env.OK("task", "show", "t_2")["requests"].([]any)[0].(map[string]any)["seq"].(float64)))
+	env.Script(map[string][][]action{"t_1": {{{"report": []string{"result", "Initial answer"}}, {"report": []string{"note", "Waiting for more work"}}}}})
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_1", "done")
+	second := strconv.Itoa(int(env.OK("task", "send", "t_1", "Second request")["seq"].(float64)))
+	env.OK("task", "send", "t_1", "Third request")
+	env.Script(map[string][][]action{"t_1": {
+		{},
+		{
+			{"report": []string{"progress", "Working on both"}},
+			{"report": []string{"notify", "Shared preview ready"}},
+			{"report": []string{"notify", "Second request preview ready", "--request", second}},
+			{"report": []string{"notify", "First answer FYI", "--request", first}},
+			{"report": []string{"notify", "Wrong owner", "--request", foreign}},
+			{"report": []string{"notify", "Unknown", "--request", "999999"}},
+			{"report": []string{"note", "Both requests still open"}},
+		},
+	}})
+	env.StartDaemon()
+	env.Eventually("driver interim turn", func() bool { return len(callsFor(env, "t_1", 1)) == 1 })
+	env.Eventually("notifying inbox items", func() bool { return len(env.OK("inbox")["items"].([]any)) == 4 })
+	if errs := commandErrors(env, "t_1"); len(errs) != 2 || !strings.Contains(errs[0], `"kind":"invalid_request"`) || !strings.Contains(errs[1], `"kind":"invalid_request"`) {
+		t.Fatalf("foreign and unknown targets should be refused: %v", errs)
+	}
+	shown := env.OK("task", "show", "t_1")
+	if shown["task"].(map[string]any)["state"] != "running" || len(shown["requests"].([]any)) != 3 {
+		t.Fatalf("notification changed task or request count: %v", shown)
+	}
+	for i, req := range shown["requests"].([]any) {
+		state := req.(map[string]any)["state"]
+		if i == 0 && state != "answered" || i != 0 && state != "open" {
+			t.Fatalf("notification changed request %d: %v", i, req)
+		}
+	}
+	items := env.OK("inbox")["items"].([]any)
+	for i, want := range []string{"", second, first} {
+		event := items[i+1].(map[string]any)["event"].(map[string]any)
+		data := event["data"].(map[string]any)
+		if event["name"] != "task.notify" || (want == "" && data["request"] != nil) || (want != "" && (data["request"] == nil || strconv.Itoa(int(data["request"].(float64))) != want)) ||
+			items[i+1].(map[string]any)["next"].(map[string]any)["reply"] != nil {
+			t.Fatalf("notify %d: %v", i, items[i+1])
+		}
+	}
+}
+
+func TestChildNotifyWakesSubDriverWithoutFinishingChild(t *testing.T) {
+	env, _ := withDaemon(t)
+	env.Script(map[string][][]action{
+		"t_1": {
+			{{"shephrd": []string{"task", "create", "--repo", "api", "--objective", "Investigate"}}, {"shephrd": []string{"task", "start", "t_2"}}, {"report": []string{"note", "Waiting for child"}}},
+			{{"report": []string{"note", "Preview received; waiting for final result"}}},
+			{{"report": []string{"result", "Final investigation received"}}, {"report": []string{"note", "Done"}}},
+		},
+		"t_2": {{{"report": []string{"progress", "Internal milestone"}}, {"report": []string{"notify", "Interim findings ready"}}, {"wait": "child-finish"}, {"work": "Investigated"}, {"report": []string{"result", "Final findings"}}}},
+	})
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")
+	env.OK("task", "start", "t_1")
+	env.Eventually("child interim event", func() bool {
+		shown := env.Run("", "task", "show", "t_2")
+		if shown.Code != 0 {
+			return false
+		}
+		for _, entry := range shown.JSON(t)["events"].([]any) {
+			if entry.(map[string]any)["name"] == "task.notify" {
+				return true
+			}
+		}
+		return false
+	})
+	env.StartDaemon()
+	env.Eventually("sub-driver continuation", func() bool { return len(callsFor(env, "t_1", 1)) == 1 })
+	brief := callsFor(env, "t_1", 1)[0]["brief"].(string)
+	if !strings.Contains(brief, "report notify -") || !strings.Contains(brief, "task.notify on t_2") || !strings.Contains(brief, "Interim findings ready") || strings.Contains(brief, "Internal milestone") {
+		t.Fatalf("continuation brief: %s", brief)
+	}
+	if task := env.Task("t_2"); task["state"] != "running" {
+		t.Fatalf("interim report finished child: %v", task)
+	}
+	os.WriteFile(filepath.Join(env.Home, ".fakeharness", "child-finish"), nil, 0o600)
+	env.WaitState("t_2", "done")
+	env.WaitState("t_1", "done")
+	if errs := commandErrors(env, "t_1"); len(errs) != 0 {
+		t.Fatalf("sub-driver continuation failed: %v", errs)
+	}
+}
+
 func TestAnsweredDriverRequestCanAskAgain(t *testing.T) {
 	env, _ := withDaemon(t)
 	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Supervise")

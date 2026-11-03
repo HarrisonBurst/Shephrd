@@ -67,6 +67,7 @@ A sub-driver is a `driver` task. There are no separate sub-driver records or com
 
 - **Every `message` to a driver task is a request.** Creating a driver task makes its objective the first request, and the owner adds more by sending messages, which is how one sub-driver is reused for several pieces of work.
 - **Children belong to a request.** A child created by a driver run records the request it serves: the only open one, or the one named with `--request` when several are open.
+- **Interim reports do not answer requests.** A `notify` report is owner-visible evidence without a result artifact or request state change. A driver may optionally name one of its own requests, including an answered one; without `--request`, the update remains unscoped even when several requests are open. A worker's notify has no request target.
 - **Results answer requests.** A driver run reports a `result` or `question` for one request, referencing it, whenever that request is ready. One request's result never waits on another's work. With a single open request it may omit `--request`; with no open request it must name an answered request on its own task explicitly with `--request <seq>` for a follow-up question or revised result. An unknown, foreign or closed task's request is never eligible.
 - **Follow-ups keep history.** A follow-up question makes the named answered request `asked` and clears its current result; the owner's reply reopens that request. A revised result replaces only that request's current answer with a newly sealed artifact. Earlier result events and sealed artifacts remain historical evidence, not the current answer. Neither path accepts a task or its children, lands, discards or grants authority.
 - **Results carry evidence of their children.** Coordination attaches the current state of the request's children to each result, so the owner sees anything still running or awaiting landing. That state is evidence; it requires nothing.
@@ -101,7 +102,7 @@ An append-only, ordered log per task. Each event records sequence, task, attempt
 | Direction | Kinds |
 |---|---|
 | Down, from the owner | `message`, `reply` |
-| Up, from the run | `progress`, `question`, `result`, `blocker` |
+| Up, from the run | `progress`, `notify`, `question`, `result`, `blocker` |
 | Either | `note`: inert judgment kept across restarts, replacing annotations |
 | System | `state` (transition, caller and reason), `stale` |
 
@@ -183,7 +184,7 @@ Every event log entry is published as a plugin event:
 | `task.created` | Owner, parent, role, repository, title, deliverable, target, dependencies |
 | `task.state` | From, to, reason |
 | `task.message`, `task.reply` | Body, `reply_to` |
-| `task.progress`, `task.question`, `task.result`, `task.blocker` | Body, the request it answers for a driver task, and for results the artifact reference defined by artifacts and authority and the state of the request's children |
+| `task.progress`, `task.notify`, `task.question`, `task.result`, `task.blocker` | Body; optional request sequence for a driver's notify, required request sequence for a driver's question or result; for results, the artifact reference defined by artifacts and authority and the state of the request's children |
 | `task.note` | Body |
 | `task.adopted` | From driver, to driver |
 | `task.data` | Plugin namespace and changed keys |
