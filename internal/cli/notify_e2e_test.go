@@ -196,8 +196,7 @@ func TestDriverNotifiesWithSeveralOpenRequests(t *testing.T) {
 		},
 	}})
 	env.StartDaemon()
-	env.Eventually("driver interim turn", func() bool { return len(callsFor(env, "t_1", 1)) == 1 })
-	env.Eventually("notifying inbox items", func() bool { return len(env.OK("inbox")["items"].([]any)) == 4 })
+	waitStateFromDaemon(t, env, "t_1", "running")
 	if errs := commandErrors(env, "t_1"); len(errs) != 2 || !strings.Contains(errs[0], `"kind":"invalid_request"`) || !strings.Contains(errs[1], `"kind":"invalid_request"`) {
 		t.Fatalf("foreign and unknown targets should be refused: %v", errs)
 	}
