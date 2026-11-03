@@ -222,6 +222,42 @@ func TestDriverNotifiesWithSeveralOpenRequests(t *testing.T) {
 	}
 }
 
+func TestNotifyOutcomeAfterOwnerReplyDoesNotAnswerRequest(t *testing.T) {
+	env, _ := withDaemon(t)
+	env.OK("task", "create", "--role", "driver", "--repo", "api", "--objective", "Complete the review")
+	request := env.OK("task", "show", "t_1")["requests"].([]any)[0].(map[string]any)["seq"]
+	env.Script(map[string][][]action{"t_1": {{{"report": []string{"question", "May I share the interim review?"}}, {"report": []string{"note", "Waiting for approval"}}}}})
+	env.OK("task", "start", "t_1")
+	env.WaitState("t_1", "waiting")
+	question := questionSeq(env, "t_1")
+	reply := env.OK("task", "send", "t_1", "Approved; continue the review", "--reply-to", question)["seq"]
+	replySeq := strconv.Itoa(int(reply.(float64)))
+	env.Script(map[string][][]action{"t_1": {
+		{},
+		{
+			{"report": []string{"notify", "Approval received; interim findings shared", "--request", replySeq}},
+			{"report": []string{"notify", "Approval received; interim findings shared"}},
+			{"report": []string{"note", "Review still in progress"}},
+		},
+	}})
+	env.StartDaemon()
+	env.Eventually("outcome in owner's inbox", func() bool { return len(env.OK("inbox")["items"].([]any)) == 2 })
+	if errs := commandErrors(env, "t_1"); len(errs) != 1 || !strings.Contains(errs[0], `"kind":"invalid_request"`) {
+		t.Fatalf("reply sequence accepted as a request: %v", errs)
+	}
+	shown := env.OK("task", "show", "t_1")
+	requests := shown["requests"].([]any)
+	if shown["task"].(map[string]any)["state"] != "running" || len(requests) != 1 || requests[0].(map[string]any)["seq"] != request || requests[0].(map[string]any)["state"] != "open" {
+		t.Fatalf("outcome changed request or task state: %v", shown)
+	}
+	items := env.OK("inbox")["items"].([]any)
+	event := items[1].(map[string]any)["event"].(map[string]any)
+	data := event["data"].(map[string]any)
+	if event["name"] != "task.notify" || data["request"] != nil || data["body"] != "Approval received; interim findings shared" {
+		t.Fatalf("unscoped outcome not delivered: %v", items[1])
+	}
+}
+
 func TestChildNotifyWakesSubDriverWithoutFinishingChild(t *testing.T) {
 	env, _ := withDaemon(t)
 	env.Script(map[string][][]action{
