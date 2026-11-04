@@ -70,6 +70,7 @@ func main() {
 		}
 		json.NewEncoder(os.Stdout).Encode(out)
 	case "create":
+		checkBase(flags["repo"], flags["base"])
 		p := pr{Number: len(prs) + 1, Repo: flags["repo"], Head: flags["head"], Base: flags["base"], Title: flags["title"], Body: flags["body"], IsDraft: flags["draft"] == "true", State: "OPEN"}
 		prs = append(prs, p)
 		save(prs)
@@ -81,7 +82,7 @@ func main() {
 			mergeable = "BLOCKED"
 		}
 		head := p.MergedHead
-		if p.State != "MERGED" {
+		if p.State != "MERGED" && head == "" {
 			head = git(p.Repo, "rev-parse", "refs/heads/"+p.Head)
 		}
 		out := map[string]any{"state": p.State, "title": p.Title, "body": p.Body, "isDraft": p.IsDraft, "mergeable": mergeable, "url": url(*p), "baseRefName": p.Base,
@@ -92,6 +93,7 @@ func main() {
 		json.NewEncoder(os.Stdout).Encode(out)
 	case "edit":
 		p := find()
+		checkBase(p.Repo, flags["base"])
 		p.Base = flags["base"]
 		save(prs)
 	case "merge":
@@ -145,6 +147,13 @@ func git(dir string, args ...string) string {
 		fail(fmt.Sprintf("git %v: %v: %s", args, err, out))
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func checkBase(repo, base string) {
+	cmd := exec.Command("git", "--git-dir", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+base)
+	if cmd.Run() != nil {
+		fail("Proposed base branch was not found: " + base)
+	}
 }
 
 func url(p pr) string {

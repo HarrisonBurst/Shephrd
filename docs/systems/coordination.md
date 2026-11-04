@@ -80,7 +80,7 @@ A task may wait on sibling tasks under the same owner. Each dependency waits for
 
 The graph is acyclic. A queued task is **ready** when every dependency has reached its milestone, and a dependency that closed any other way is reported as never satisfiable.
 
-A task never starts before its dependencies' work is finished. Only tasks with no dependency between them run in parallel. A task that depends on published but unmerged code [stacks](artifacts.md#stacking) on it: it starts from the dependency's branch, and its owner is told with a `dependency.changed` event if that dependency later changes.
+A task never starts before its dependencies' work is finished. Only tasks with no dependency between them run in parallel. A task that depends on published but unmerged code [stacks](artifacts.md#stacking) on it: it starts from the dependency's branch, and its owner is told with a `dependency.changed` event if that dependency later changes. A parent PR merging before its task reaches the merged milestone does not change the pinned child input; only [proved landing evidence](artifacts.md#stacking) permits a different effective PR base.
 
 Dependencies never cross owners. Ordering between subtrees, such as work in two repositories, is expressed one level up, between the driver tasks that own them.
 

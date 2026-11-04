@@ -31,6 +31,7 @@ type ForgeRequest struct {
 	BodyExplicit  bool      `json:"body_explicit,omitempty"`
 	Draft         bool      `json:"draft,omitempty"`
 	DraftExplicit bool      `json:"draft_explicit,omitempty"`
+	RequireNew    bool      `json:"require_new,omitempty"`
 	Task          string    `json:"task"`
 }
 
@@ -111,34 +112,87 @@ func pullRequest(q coord.Querier, task, artifact int64) (ref, url string, err er
 	return ref, url, err
 }
 
-// stackedOn returns the unmerged dependency the task's current attempt was
-// built on, or nil.
-func (s *Service) stackedOn(t *coord.Task) (*coord.Task, *Artifact, error) {
+func (s *Service) stackedTarget(ctx context.Context, t *coord.Task, landing config.Landing, branch string) (string, bool, error) {
 	a, err := coord.LoadAttempt(s.DB, t.ID, t.Attempt)
 	if err != nil || a.StackedOn == 0 {
-		return nil, nil, err
+		return branch, false, err
 	}
 	dep, err := coord.Load(s.DB, a.StackedOn)
-	if err != nil || dep.Milestone == "merged" || dep.ArtifactID == 0 {
-		return nil, nil, err
+	if err != nil {
+		return "", false, err
+	}
+	if dep.Milestone == "merged" {
+		return branch, false, nil
+	}
+	if dep.State != "done" || dep.Milestone != "published" || dep.ArtifactID == 0 {
+		return "", false, fault.New("not_proven", "stacked dependency %s has no current published artifact", dep.Ref)
 	}
 	art, err := Load(s.DB, dep.ArtifactID)
-	return dep, art, err
+	if err != nil {
+		return "", false, err
+	}
+	if a.Base != art.Commit {
+		return "", false, fault.New("not_proven", "stacked dependency %s has changed since %s started", dep.Ref, t.Ref)
+	}
+	var pinned int64
+	if err := s.DB.QueryRow(`SELECT artifact FROM attempt_inputs WHERE task = ? AND attempt = ? AND dependency = ?`, t.ID, a.N, dep.ID).Scan(&pinned); err != nil {
+		return "", false, err
+	}
+	if pinned != art.ID {
+		return "", false, fault.New("not_proven", "stacked dependency %s no longer matches %s's pinned input", dep.Ref, t.Ref)
+	}
+	ref, url, err := pullRequest(s.DB, dep.ID, art.ID)
+	if err != nil {
+		return "", false, err
+	}
+	if ref == "" || url == "" {
+		return "", false, fault.New("not_proven", "stacked dependency %s has no recorded pull request", dep.Ref)
+	}
+	observed, err := s.forge(ctx, landing, dep, ForgeRequest{Operation: "observe", Branch: art.Branch, Commit: art.Commit, PullRequest: ref})
+	if err != nil {
+		return "", false, fault.New("not_proven", "stacked dependency %s cannot be read: %v", dep.Ref, err)
+	}
+	if observed.PullRequest != ref || observed.URL != url {
+		return "", false, fault.New("not_proven", "stacked dependency %s has no matching pull request", dep.Ref)
+	}
+	if observed.State == "open" && observed.Head == art.Commit {
+		repo, _, host, err := s.repo(dep)
+		if err != nil {
+			return "", false, err
+		}
+		var remote struct {
+			Tip string `json:"tip"`
+		}
+		if err := host.Call(ctx, "branch_tip", execution.TipRequest{Repo: repo, Branch: art.Branch}, &remote); err != nil || remote.Tip != art.Commit {
+			return "", false, fault.New("not_proven", "stacked dependency %s has no matching live branch", dep.Ref)
+		}
+		return art.Branch, false, nil
+	}
+	if observed.State != "merged" {
+		return "", false, fault.New("not_proven", "stacked dependency %s has no matching open or merged pull request", dep.Ref)
+	}
+	parent, err := coord.LoadAttempt(s.DB, dep.ID, art.Attempt)
+	if err != nil {
+		return "", false, err
+	}
+	if parent.StackedOn != 0 || parent.Base != art.Base || dep.RepoID != t.RepoID {
+		return "", false, fault.New("not_proven", "stacked dependency %s has no proved default-branch base", dep.Ref)
+	}
+	_, _, _, _, err = s.recordedMerge(ctx, dep, art, landing, &PullRequest{Ref: ref, URL: url})
+	if err != nil {
+		return "", false, err
+	}
+	return branch, true, nil
 }
 
-// deliverPullRequest pushes the sealed commit to the attempt branch and
-// opens its pull request, against the stacked dependency's branch while
-// that is unmerged. It merges right away only when Shephrd merges.
 func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coord.Task, art *Artifact, landing config.Landing, grant string, options PublishOptions) (*Delivered, error) {
 	repo, branch, host, err := s.repo(t)
 	if err != nil {
 		return nil, err
 	}
-	target := branch
-	if _, depArt, err := s.stackedOn(t); err != nil {
+	target, fallback, err := s.stackedTarget(ctx, t, landing, branch)
+	if err != nil {
 		return nil, err
-	} else if depArt != nil {
-		target = depArt.Branch
 	}
 	var push execution.PushResponse
 	if err := host.Call(ctx, "push_branch", execution.PushRequest{Repo: repo, Branch: art.Branch, Commit: art.Commit}, &push); err != nil {
@@ -147,7 +201,7 @@ func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coo
 		})
 		return nil, err
 	}
-	existing, _, err := pullRequest(s.DB, t.ID, 0)
+	existing, existingURL, err := pullRequest(s.DB, t.ID, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +216,7 @@ func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coo
 		Operation: "publish", Repo: ForgeRepo{Remote: push.Remote}, Branch: art.Branch, Target: target,
 		Commit: art.Commit, PullRequest: existing, Title: title, Body: body,
 		TitleExplicit: options.Title != nil, BodyExplicit: options.Body != nil, Draft: options.Draft, DraftExplicit: options.DraftExplicit,
+		RequireNew: fallback && existing == "",
 	})
 	if err != nil {
 		s.DB.Write(ctx, func(tx *store.Tx) error {
@@ -169,8 +224,8 @@ func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coo
 		})
 		return nil, err
 	}
-	if published.PullRequest == "" || published.URL == "" {
-		return nil, fault.New("landing_failed", "forge %s did not identify the published pull request", landing.Forge)
+	if published.PullRequest == "" || published.URL == "" || (fallback && existing != "" && (published.PullRequest != existing || published.URL != existingURL)) {
+		return nil, fault.New("landing_failed", "forge %s did not identify the recorded pull request", landing.Forge)
 	}
 	pr := &PullRequest{Ref: published.PullRequest, URL: published.URL, Target: target, State: "open"}
 	err = s.DB.Write(ctx, func(tx *store.Tx) error {
@@ -181,8 +236,8 @@ func (s *Service) deliverPullRequest(ctx context.Context, c coord.Caller, t *coo
 		if err := RecordUse(tx, grant, "land", t, c); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO landings (task, artifact, mode, outcome, pull_request, detail, time) VALUES (?, ?, ?, 'published', ?, ?, ?)`,
-			t.ID, art.ID, landing.Mode, pr.Ref, pr.URL, store.Timestamp(tx.Now)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO landings (task, artifact, mode, outcome, pull_request, detail, time, effective_base) VALUES (?, ?, ?, 'published', ?, ?, ?, ?)`,
+			t.ID, art.ID, landing.Mode, pr.Ref, pr.URL, store.Timestamp(tx.Now), target); err != nil {
 			return err
 		}
 		if _, err := tx.Emit("land.attempted", c.String(), t.ID, art.Attempt, 0, map[string]any{
@@ -221,30 +276,11 @@ func (s *Service) mergePullRequest(ctx context.Context, c coord.Caller, t *coord
 }
 
 func (s *Service) provePullRequest(ctx context.Context, c coord.Caller, t *coord.Task, art *Artifact, landing config.Landing, pr *PullRequest, wake bool) (*Delivered, error) {
-	observed, err := s.forge(ctx, landing, t, ForgeRequest{Operation: "observe", Branch: art.Branch, Commit: art.Commit, PullRequest: pr.Ref})
-	if err != nil {
-		return nil, fault.New("not_proven", "pull request %s cannot be read: %v", pr.Ref, err).WithNext("task", "verify", t.Ref)
-	}
-	if observed.State != "merged" || observed.PullRequest != pr.Ref || observed.URL == "" || observed.URL != pr.URL {
-		return nil, fault.New("not_proven", "pull request %s has no matching merged record", pr.Ref).WithNext("task", "verify", t.Ref)
-	}
-	repo, branch, host, err := s.repo(t)
+	observed, delta, proof, source, err := s.recordedMerge(ctx, t, art, landing, pr)
 	if err != nil {
 		return nil, err
 	}
-	proof, source, rewritten := "ancestry", "git", false
-	var delta execution.DeltaProof
-	if !s.onBranch(ctx, host, repo, branch, art.Commit) {
-		if observed.MergeCommit == "" {
-			return nil, fault.New("not_proven", "pull request %s has no merge carrier", pr.Ref)
-		}
-		if err := host.Call(ctx, "prove_delta", execution.DeltaRequest{
-			Repo: repo, Branch: branch, Base: art.Base, Commit: art.Commit, Carrier: observed.MergeCommit,
-		}, &delta); err != nil {
-			return nil, fault.New("not_proven", "pull request %s has no matching sealed delta: %v", pr.Ref, err).WithNext("task", "verify", t.Ref)
-		}
-		proof, source, rewritten = "recorded_merge", "forge:"+landing.Forge, true
-	}
+	rewritten := proof == "recorded_merge"
 	err = s.DB.Write(ctx, func(tx *store.Tx) error {
 		t, err := coord.Load(tx, t.ID)
 		if err != nil {
@@ -269,10 +305,42 @@ func (s *Service) provePullRequest(ctx context.Context, c coord.Caller, t *coord
 	if err != nil {
 		return nil, err
 	}
+	_, branch, _, err := s.repo(t)
+	if err != nil {
+		return nil, err
+	}
 	s.retargetStacked(ctx, t, landing, branch)
 	pr.State = "merged"
 	out, err := s.finish(ctx, c, t.ID, &Delivered{Artifact: art, PullRequest: pr})
 	return out, err
+}
+
+func (s *Service) recordedMerge(ctx context.Context, t *coord.Task, art *Artifact, landing config.Landing, pr *PullRequest) (*ForgeResponse, execution.DeltaProof, string, string, error) {
+	var delta execution.DeltaProof
+	observed, err := s.forge(ctx, landing, t, ForgeRequest{Operation: "observe", Branch: art.Branch, Commit: art.Commit, PullRequest: pr.Ref})
+	if err != nil {
+		return nil, delta, "", "", fault.New("not_proven", "pull request %s cannot be read: %v", pr.Ref, err).WithNext("task", "verify", t.Ref)
+	}
+	if observed.State != "merged" || observed.PullRequest != pr.Ref || observed.URL == "" || observed.URL != pr.URL {
+		return nil, delta, "", "", fault.New("not_proven", "pull request %s has no matching merged record", pr.Ref).WithNext("task", "verify", t.Ref)
+	}
+	repo, branch, host, err := s.repo(t)
+	if err != nil {
+		return nil, delta, "", "", err
+	}
+	proof, source := "ancestry", "git"
+	if !s.onBranch(ctx, host, repo, branch, art.Commit) {
+		if observed.MergeCommit == "" {
+			return nil, delta, "", "", fault.New("not_proven", "pull request %s has no merge carrier", pr.Ref)
+		}
+		if err := host.Call(ctx, "prove_delta", execution.DeltaRequest{
+			Repo: repo, Branch: branch, Base: art.Base, Commit: art.Commit, Carrier: observed.MergeCommit,
+		}, &delta); err != nil {
+			return nil, delta, "", "", fault.New("not_proven", "pull request %s has no matching sealed delta: %v", pr.Ref, err).WithNext("task", "verify", t.Ref)
+		}
+		proof, source = "recorded_merge", "forge:"+landing.Forge
+	}
+	return observed, delta, proof, source, nil
 }
 
 func (s *Service) onBranch(ctx context.Context, host execution.Host, repo, branch, commit string) bool {
@@ -365,6 +433,7 @@ func StackBase(db *store.Store, cfg *config.Config) func(*coord.Task) (string, i
 }
 
 type Landing struct {
+	EffectiveBase  string `json:"effective_base,omitempty"`
 	Mode           string `json:"mode"`
 	Outcome        string `json:"outcome"`
 	PullRequest    string `json:"pull_request,omitempty"`
@@ -382,7 +451,7 @@ type Landing struct {
 
 // Landings lists a task's landing attempts, oldest first.
 func Landings(q coord.Querier, task int64) ([]Landing, error) {
-	rows, err := q.Query(`SELECT mode, outcome, pull_request, merge_commit, proof, proof_source, detail, time, sealed_base, sealed_commit, premerge_parent, expected_tree, carrier_tree FROM landings WHERE task = ? ORDER BY id`, task)
+	rows, err := q.Query(`SELECT effective_base, mode, outcome, pull_request, merge_commit, proof, proof_source, detail, time, sealed_base, sealed_commit, premerge_parent, expected_tree, carrier_tree FROM landings WHERE task = ? ORDER BY id`, task)
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +459,7 @@ func Landings(q coord.Querier, task int64) ([]Landing, error) {
 	landings := []Landing{}
 	for rows.Next() {
 		var l Landing
-		if err := rows.Scan(&l.Mode, &l.Outcome, &l.PullRequest, &l.MergeCommit, &l.Proof, &l.Source, &l.Detail, &l.Time, &l.SealedBase, &l.SealedCommit, &l.PremergeParent, &l.ExpectedTree, &l.CarrierTree); err != nil {
+		if err := rows.Scan(&l.EffectiveBase, &l.Mode, &l.Outcome, &l.PullRequest, &l.MergeCommit, &l.Proof, &l.Source, &l.Detail, &l.Time, &l.SealedBase, &l.SealedCommit, &l.PremergeParent, &l.ExpectedTree, &l.CarrierTree); err != nil {
 			return nil, err
 		}
 		landings = append(landings, l)

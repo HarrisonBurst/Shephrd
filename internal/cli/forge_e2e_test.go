@@ -225,6 +225,147 @@ func TestStackedPullRequestsAndASquashMergeProvenByTheForge(t *testing.T) {
 	}
 }
 
+func TestStackedLandingAfterDeletedSquashParent(t *testing.T) {
+	for _, published := range []bool{false, true} {
+		name := "new child PR"
+		if published {
+			name = "manually retargeted published child PR"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := withGitHub(t, "external", "squash")
+			f.OK("task", "create", "--repo", "api", "--objective", "Parent")
+			f.OK("task", "create", "--repo", "api", "--objective", "Child", "--after", "t_1")
+			f.OK("task", "start", "t_1")
+			f.WaitState("t_1", "done")
+			f.OK("task", "accept", "t_1")
+			f.OK("task", "start", "t_2")
+			f.WaitState("t_2", "done")
+			child := f.OK("task", "show", "t_2")["artifact"].(map[string]any)
+			if published {
+				f.OK("task", "accept", "t_2")
+			}
+			f.gh(t, "pr", "merge", "1", "--repo", f.origin, "--squash")
+			testkit.Git(t, f.clone, "push", "-q", f.origin, ":refs/heads/shephrd/t_1/1")
+			if published {
+				f.gh(t, "pr", "edit", "2", "--repo", f.origin, "--base", "main")
+			}
+			out := f.OK("task", "accept", "t_2")
+			pr := out["pull_request"].(map[string]any)
+			if pr["target"] != "main" || pr["ref"] != "2" {
+				t.Fatalf("wrong target or PR: %v", out)
+			}
+			if prs := f.pullRequests(t); len(prs) != 2 || prs[1]["base"] != "main" {
+				t.Fatalf("child PR was not reused against main: %v", prs)
+			}
+			shown := f.OK("task", "show", "t_2")
+			if got := shown["artifact"].(map[string]any)["commit"]; got != child["commit"] {
+				t.Fatalf("sealed artifact changed: %v != %v", got, child["commit"])
+			}
+			landings := shown["landings"].([]any)
+			if last := landings[len(landings)-1].(map[string]any); last["effective_base"] != "main" || last["pull_request"] != "2" {
+				t.Fatalf("fallback base or binding not recorded: %v", landings)
+			}
+			if parent := f.Task("t_1"); parent["milestone"] != "published" {
+				t.Fatalf("independent proof unexpectedly closed parent: %v", parent)
+			}
+		})
+	}
+}
+
+func TestStackedFallbackRefusesUnprovedParent(t *testing.T) {
+	for _, variant := range []string{"missing branch unexplained", "sibling merged", "closed unmerged", "forge unavailable", "missing publication", "wrong parent PR", "content mismatch", "unrecorded child PR"} {
+		t.Run(variant, func(t *testing.T) {
+			f := withGitHub(t, "external", "squash")
+			f.OK("task", "create", "--repo", "api", "--objective", "Parent")
+			f.OK("task", "create", "--repo", "api", "--objective", "Child", "--after", "t_1")
+			f.OK("task", "start", "t_1")
+			f.WaitState("t_1", "done")
+			f.OK("task", "accept", "t_1")
+			f.OK("task", "start", "t_2")
+			f.WaitState("t_2", "done")
+			if variant == "sibling merged" {
+				f.OK("task", "create", "--repo", "api", "--objective", "Sibling")
+				f.OK("task", "start", "t_3")
+				f.WaitState("t_3", "done")
+				f.OK("task", "accept", "t_3")
+				f.gh(t, "pr", "merge", "2", "--repo", f.origin, "--squash")
+				f.OK("task", "verify", "t_3")
+			}
+			if variant != "missing branch unexplained" && variant != "sibling merged" && variant != "closed unmerged" {
+				f.gh(t, "pr", "merge", "1", "--repo", f.origin, "--squash")
+			}
+			if variant != "closed unmerged" {
+				testkit.Git(t, f.clone, "push", "-q", f.origin, ":refs/heads/shephrd/t_1/1")
+			}
+			switch variant {
+			case "missing branch unexplained":
+				commit := f.OK("task", "show", "t_1")["artifact"].(map[string]any)["commit"]
+				f.editPRs(t, func(prs []map[string]any) []map[string]any { prs[0]["merged_head"] = commit; return prs })
+			case "closed unmerged":
+				f.editPRs(t, func(prs []map[string]any) []map[string]any { prs[0]["state"] = "CLOSED"; return prs })
+			case "forge unavailable":
+				f.editPRs(t, func(prs []map[string]any) []map[string]any { prs[0]["repo"] = "unavailable"; return prs })
+			case "missing publication":
+				if _, err := f.database(t).Exec(`DELETE FROM landings WHERE task = 1`); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong parent PR":
+				if _, err := f.database(t).Exec(`UPDATE landings SET pull_request = '999' WHERE task = 1`); err != nil {
+					t.Fatal(err)
+				}
+			case "content mismatch":
+				f.checkoutMain(t)
+				testkit.Git(t, f.clone, "reset", "--soft", "HEAD^")
+				if err := os.WriteFile(filepath.Join(f.clone, "extra.txt"), []byte("extra"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				testkit.Git(t, f.clone, "add", "extra.txt")
+				testkit.Git(t, f.clone, "commit", "-q", "-m", "alter carrier")
+				carrier := testkit.Git(t, f.clone, "rev-parse", "HEAD")
+				testkit.Git(t, f.clone, "push", "-q", "--force", f.origin, "main")
+				f.editPRs(t, func(prs []map[string]any) []map[string]any { prs[0]["merge_commit"] = carrier; return prs })
+				f.Refused("not_proven", "task", "verify", "t_1")
+			case "unrecorded child PR":
+				art := f.OK("task", "show", "t_2")["artifact"].(map[string]any)
+				testkit.Git(t, f.clone, "push", "-q", f.origin, art["commit"].(string)+":refs/heads/shephrd/t_2/1")
+				f.gh(t, "pr", "create", "--repo", f.origin, "--head", "shephrd/t_2/1", "--base", "main", "--title", "External")
+			}
+			kind := "not_proven"
+			if variant == "unrecorded child PR" {
+				kind = "landing_failed"
+			}
+			f.Refused(kind, "task", "accept", "t_2")
+			shown := f.OK("task", "show", "t_2")
+			if shown["task"].(map[string]any)["milestone"] != "" && shown["task"].(map[string]any)["milestone"] != nil {
+				t.Fatalf("refused child was published: %v", shown)
+			}
+			for _, landing := range shown["landings"].([]any) {
+				if landing.(map[string]any)["outcome"] != "failed" {
+					t.Fatalf("refused child gained publication: %v", shown)
+				}
+			}
+		})
+	}
+}
+
+func TestStackedFallbackRefusesAncestorBase(t *testing.T) {
+	f := withGitHub(t, "external", "squash")
+	f.OK("task", "create", "--repo", "api", "--objective", "Ancestor")
+	f.OK("task", "create", "--repo", "api", "--objective", "Parent", "--after", "t_1")
+	f.OK("task", "create", "--repo", "api", "--objective", "Child", "--after", "t_2")
+	f.OK("task", "start", "t_1")
+	f.WaitState("t_1", "done")
+	f.OK("task", "accept", "t_1")
+	f.OK("task", "start", "t_2")
+	f.WaitState("t_2", "done")
+	f.OK("task", "accept", "t_2")
+	f.OK("task", "start", "t_3")
+	f.WaitState("t_3", "done")
+	f.gh(t, "pr", "merge", "2", "--repo", f.origin, "--squash")
+	testkit.Git(t, f.clone, "push", "-q", f.origin, ":refs/heads/shephrd/t_2/1")
+	f.Refused("not_proven", "task", "accept", "t_3")
+}
+
 func TestStackedChildSquashProvesOnlyItsSealedDelta(t *testing.T) {
 	f := withGitHub(t, "external", "squash")
 	f.OK("task", "create", "--repo", "api", "--objective", "Parent")

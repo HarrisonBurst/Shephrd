@@ -73,7 +73,7 @@ func upgradeBinaries(t *testing.T) (string, string) {
 		return path
 	}
 	v1 := build(legacy, "fixture-v1")
-	if err := os.WriteFile(filepath.Join(migrations, "0006_upgrade_probe.sql"), []byte("ALTER TABLE landings ADD COLUMN upgrade_probe TEXT NOT NULL DEFAULT '';\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(migrations, "0007_upgrade_probe.sql"), []byte("ALTER TABLE landings ADD COLUMN upgrade_probe TEXT NOT NULL DEFAULT '';\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return v1, build(legacy, "fixture-v2")
@@ -156,7 +156,7 @@ func TestActiveRunSurvivesStoreMigration(t *testing.T) {
 			env.Eventually("v1 progress from active harness", func() bool {
 				return len(env.Calls()) >= 2 && env.Task("t_1")["state"] == "running"
 			})
-			if migrationVersion(t, env) != 5 {
+			if migrationVersion(t, env) != 6 {
 				t.Fatal("v1 migration chain is incomplete")
 			}
 			var spec struct {
@@ -188,7 +188,7 @@ func TestActiveRunSurvivesStoreMigration(t *testing.T) {
 			env.Bin = v2
 			env.OK("task", "show", "t_1")
 			env.StartDaemon()
-			if migrationVersion(t, env) != 6 {
+			if migrationVersion(t, env) != 7 {
 				t.Fatal("v2 did not migrate the store")
 			}
 			old := env.Bin

@@ -338,6 +338,13 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 			return nil, fault.New("landing_failed", "push %s: %v", req.Branch, err)
 		}
 		return PushResponse{Remote: remote}, nil
+	case "branch_tip":
+		req, err := decode[TipRequest](body)
+		if err != nil {
+			return nil, err
+		}
+		tip, err := branchTip(req.Repo, req.Branch)
+		return map[string]string{"tip": tip}, err
 	case "prove_ancestry":
 		req, err := decode[AncestryRequest](body)
 		if err != nil {
