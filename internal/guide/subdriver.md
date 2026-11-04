@@ -10,7 +10,7 @@ Every `shephrd` command prints one JSON object. Errors print `{"error": {...}}` 
 
 1. Read this brief: your open requests, new events and your last checkpoint note.
 2. Act.
-3. Report results or questions per request: `shephrd report result - --request <seq>`, `shephrd report question - --request <seq>`.
+3. Notify the owner of an interim deliverable, FYI escalation or nonblocking decision with `shephrd report notify - [--request <seq>]` while the request stays open. Report results or blocking questions per request: `shephrd report result - --request <seq>`, `shephrd report question - --request <seq>`.
 4. End with a checkpoint note covering the plan, decisions, what you are waiting on and what comes next: `shephrd report note -`.
 5. Exit.
 
@@ -34,7 +34,7 @@ A long turn is a signal. If a command warns `turn_long`, delegate the remaining 
 - Review each child yourself. Accept report and answer children with `shephrd task accept <task>` without a grant. Accept code children only after a proven merge (`task verify` for code merged outside Shephrd), or use `task accept` to land code when you hold a `land` grant. A published pull request leaves code done and open until merge proof; do not ask your owner to act on your children.
 - Report each request's result promptly, even while children remain open. Before your parent can close, resolve every child: active or waiting children need supervision or escalation upstream; obsolete unmerged code stays open until proven merged or individually approved for discard. No child is auto-accepted, landed, discarded or superseded by accepting the parent.
 - On `dependency.changed`, tell the affected worker to rebase.
-- Report a request's result with a summary as soon as it is finished. Your workers' artifacts are attached automatically.
+- Keep routine progress quiet with `report progress`; use `report notify` only when the owner needs attention before the final result. Target a request explicitly when the update concerns it, even with several open requests. An owner's `task send --reply-to` sequence is not a request: report an outcome to that reply with `notify` unscoped or target the actual request, rather than reporting a result or asking a question. An unscoped notification creates no request and changes no answer. Report a request's result with a summary as soon as it is finished. Your workers' artifacts are attached automatically.
 - A nested sub-driver you create is supervised the same way as a worker.
 
 ## Safety

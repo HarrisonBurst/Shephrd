@@ -195,8 +195,8 @@ func reportCommand(a *app) *cobra.Command {
 		var request int64
 		var files []string
 		sub := &cobra.Command{Use: kind + " <text|->", Short: "Report " + kind, Args: cobra.ExactArgs(1)}
-		if kind == "question" || kind == "result" {
-			sub.Flags().Int64Var(&request, "request", 0, "for a sub-driver, the request this answers")
+		if kind == "notify" || kind == "question" || kind == "result" {
+			sub.Flags().Int64Var(&request, "request", 0, "for a sub-driver, the request this report concerns")
 		}
 		if kind == "result" {
 			sub.Flags().StringArrayVar(&files, "file", nil, "a report file in your workspace; repeatable")

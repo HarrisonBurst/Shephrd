@@ -153,7 +153,7 @@ Each command's behavior is defined by the spec named in its row.
 | `task log` | Read a run's session log | [Execution](execution.md) |
 | `workspace reconcile` | Classify interrupted effects on every host | [Execution](execution.md) |
 | `host list` | Hosts with reachability, version and installed providers | [Execution](execution.md) |
-| `report progress`, `question`, `result`, `blocker`, `note` | A run reports on its own task | [Notification](notifications.md) |
+| `report progress`, `notify`, `question`, `result`, `blocker`, `note` | A run reports on its own task; `notify` optionally accepts `--request <seq>` on a driver task without changing that request | [Notification](notifications.md) |
 | `inbox`, `inbox wait --after <item>`, `inbox ack <item>` | The owner reads or watches its pending items, then explicitly acknowledges handled ones | [Notification](notifications.md) |
 | `surface submit --thread <id> <text|->` | Surface-only bounded input, with the envelope `--key` as a surface-scoped retry key | [Surface mailbox](#surface-mailbox-substrate) |
 | `surface replies --thread <id> [--after <id>]`, `surface ack --thread <id> <cursor>` | Surface-only output page and durable acknowledgement for that surface/thread | [Surface mailbox](#surface-mailbox-substrate) |

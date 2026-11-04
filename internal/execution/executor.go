@@ -346,7 +346,7 @@ func (x *Executor) brief(ctx context.Context, shephrd string, t *coord.Task, a *
 	}
 	since, err := x.DB.EventsWhere(ctx, `WHERE seq > ? AND seq <= ? AND caller != ?
 		AND (task = ? OR task IN (SELECT id FROM tasks WHERE parent = ?))
-		AND name IN ('task.message', 'task.reply', 'task.question', 'task.result', 'task.blocker', 'task.state', 'dependency.changed', 'task.ready', 'workspace.retained')
+		AND name IN ('task.message', 'task.reply', 'task.notify', 'task.question', 'task.result', 'task.blocker', 'task.state', 'dependency.changed', 'task.ready', 'workspace.retained')
 		ORDER BY seq DESC LIMIT 101`, from, run.FromSeq, "task:"+t.Ref, t.ID, t.ID)
 	if err != nil {
 		return "", err

@@ -6,7 +6,7 @@
 
 Notification and result flow carries what sessions report up to the owner that delegated to them, and carries replies and new requests back down, until someone takes responsibility for each. It decides when an owner needs a new turn and wakes it. It never decides lifecycle outcomes: handling a notification is evidence, never approval.
 
-**Owns:** the `report` command, which reports count as a finished turn, routing to owners, one durable owner-scoped inbox for each driver, waking sub-drivers and workers for continuation turns, and optional push delivery to drivers.
+**Owns:** the `report` command, including which reports finish a turn, routing to owners, one durable owner-scoped inbox for each driver, waking sub-drivers and workers for continuation turns, and optional push delivery to drivers.
 
 **Does not own:** the event log and task state ([coordination](coordination.md)), starting and stopping runs ([session execution](execution.md)), whether a result is valid or accepted ([artifacts and authority](artifacts.md)), or the daemon and event subscriptions themselves ([plugins and extensibility](extensibility.md#dispatcher)).
 
@@ -17,13 +17,14 @@ A session reports by running `shephrd report`, with its run token from the envir
 | Command | Records | Notes |
 |---|---|---|
 | `report progress <text>` | `progress` | Quiet. Resets the inactivity timeout. |
+| `report notify <text> [--request <seq>]` | `notify` | Notifies the owner of an interim update; resets the inactivity timeout without ending the turn or answering a request. |
 | `report question <text>` | `question` | The task becomes `waiting`. |
 | `report result <text>` | `result` | Validated against the deliverable by artifacts and authority. |
 | `report blocker <text>` | `blocker` | The task becomes `held` with reason `blocked`. |
 | `report note <text>` | `note` | Inert. A driver's checkpoint note. |
 
 - Text comes from an argument or stdin. Bodies are bounded at 8 KiB, and notes at 4 KiB; longer material belongs in the deliverable itself.
-- A driver run may omit `--request <seq>` for a question or result only when exactly one request is open. To follow up on an answered request on its own task, it must name that request explicitly; zero open requests never select a historical request implicitly. A worker needs none.
+- A driver run may omit `--request <seq>` for a question or result only when exactly one request is open. To follow up on an answered request on its own task, it must name that request explicitly; zero open requests never select a historical request implicitly. A worker needs none. For `notify`, a driver may optionally target any request on its own task, open or answered. Omission means an unscoped update, even with exactly one or several open requests. Workers cannot use `--request`. An owner's `task send --reply-to` event has its own sequence but is not a request; an outcome in response to it can be reported unscoped or against the actual request, never against the reply sequence. A notifying report never creates, answers, reopens or closes a request, changes task state, or seals a result; `progress` stays quiet.
 - Every report takes a `--key`, so a retried report never duplicates.
 
 ### What ends a turn
@@ -41,7 +42,7 @@ Every report is recorded on the reporting task. Whether it also needs someone's 
 
 | Kind | Wakes the owner |
 |---|---|
-| `question`, `result`, `blocker` | Yes |
+| `notify`, `question`, `result`, `blocker` | Yes |
 | The task becoming `held` for any other reason, such as `no_report`, `inactive` or a lost run | Yes |
 | A [`dependency.changed`](artifacts.md#stacking) event for a task built on changed work | Yes |
 | A queued child becoming ready because work it waits on reached its milestone through someone else, such as a merge proven by `task verify` | Yes |
@@ -53,7 +54,7 @@ Where the wake goes depends on who the owner is:
 - **A driver task owner**, meaning a sub-driver, gets a continuation turn. The event appears in that turn's brief.
 - **A driver**, such as the main driver or a plugin, gets an **inbox item**.
 
-Because owners are fixed by the tree, a main driver only ever hears from its direct children. A worker's question reaches its sub-driver, which answers it or asks its own owner. An explicit question on an answered driver request sends a new `task.question` item, with that request's sequence and `next.reply`, to its direct owner. The owner's `task send --reply-to <question seq>` reopens the request; an explicit revised result sends a distinct `task.result` item. Neither makes progress or notes visible in the inbox or accepts the work.
+Because owners are fixed by the tree, a main driver only ever hears from its direct children. A worker's question reaches its sub-driver, which answers it or asks its own owner. An explicit question on an answered driver request sends a new `task.question` item, with that request's sequence and `next.reply`, to its direct owner. The owner's `task send --reply-to <question seq>` reopens the request; an explicit revised result sends a distinct `task.result` item. Neither makes progress or notes visible in the inbox or accepts the work. A `task.notify` event carries its body and optional request sequence to the same direct owner, as an inbox item for a root task or a continuation event for a child. It has read and acknowledgement commands but no reply command; a nonblocking decision may be sent as a normal owner message when needed.
 
 Going down, `task send <task> <text> [--reply-to <seq>]` records a `message`, or a `reply` when it answers a question. It wakes the task for a continuation turn. A message to a driver task is a new request.
 
@@ -68,7 +69,7 @@ The daemon starts continuation turns through session execution, under coordinati
 
 ## Inbox
 
-A driver's inbox is the durable record of the items that need its attention: questions, results, blockers and held tasks among its root tasks. `inbox` and `inbox wait` are the sole consumer interface. No delivery configuration is required for a main driver to receive items. Surface input and correlated output live in separate mailboxes, never in this inbox. With an explicit home-host `main_return` surface/thread, a completed coordinator inbox turn also writes its final text once to that scoped output mailbox, retaining its inbox item and turn IDs. Output delivery and surface cursor acknowledgement are independent of the owner's inbox acknowledgement. In manual mode the ingress substrate does not consume or acknowledge inbox items. With the explicit home-host coordinator enabled, the daemon selects one pending `driver:main` item at a time for the sole session. Only that session acknowledges the item during normal handling; an unacknowledged completed turn is held, never replayed automatically. An operator can explicitly recover a held turn with recorded evidence, acknowledging an inspected inbox item as `operator` rather than impersonating the session. Surface turns share the same serialized queue but their replies do not acknowledge inbox items.
+A driver's inbox is the durable record of the items that need its attention: notifying updates, questions, results, blockers and held tasks among its root tasks. `inbox` and `inbox wait` are the sole consumer interface. No delivery configuration is required for a main driver to receive items. Surface input and correlated output live in separate mailboxes, never in this inbox. With an explicit home-host `main_return` surface/thread, a completed coordinator inbox turn also writes its final text once to that scoped output mailbox, retaining its inbox item and turn IDs. Output delivery and surface cursor acknowledgement are independent of the owner's inbox acknowledgement. In manual mode the ingress substrate does not consume or acknowledge inbox items. With the explicit home-host coordinator enabled, the daemon selects one pending `driver:main` item at a time for the sole session. Only that session acknowledges the item during normal handling; an unacknowledged completed turn is held, never replayed automatically. An operator can explicitly recover a held turn with recorded evidence, acknowledging an inspected inbox item as `operator` rather than impersonating the session. Surface turns share the same serialized queue but their replies do not acknowledge inbox items.
 
 - **`inbox`** lists pending items, each with the event, the task and its current state, and the exact commands to read more, reply or acknowledge.
 - **`inbox ack <item>`** marks an item handled.
@@ -132,7 +133,7 @@ Follows [plugins and extensibility](extensibility.md).
 | `delivery.attempted` | Driver, item, provider, outcome |
 | `turn.woken` | Task, reason, the events included |
 
-Reports themselves are coordination's `task.progress`, `task.question`, `task.result`, `task.blocker` and `task.note` events.
+Reports themselves are coordination's `task.progress`, `task.notify`, `task.question`, `task.result`, `task.blocker` and `task.note` events.
 
 ### Intercept points
 
