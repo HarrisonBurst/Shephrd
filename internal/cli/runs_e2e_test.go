@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -204,16 +205,29 @@ func TestStopConfirmsAndStaleRunInputIsRefused(t *testing.T) {
 	if task["state"] != "held" || task["reason"] != "stopped" {
 		t.Fatalf("after stop: %v", task)
 	}
-	token := envOf(callsFor(env, "t_1", 0)[0])["SHEPHRD_RUN_TOKEN"]
+	firstCall := callsFor(env, "t_1", 0)[0]
+	token := envOf(firstCall)["SHEPHRD_RUN_TOKEN"]
 
 	resumed := env.OK("task", "resume", "t_1")
 	if resumed["attempt"].(map[string]any)["workspace"] != first["attempt"].(map[string]any)["workspace"] {
 		t.Fatalf("resume changed workspace: %v", resumed)
 	}
 	env.WaitState("t_1", "done")
+	workspace := first["attempt"].(map[string]any)["workspace"].(string)
+	quoted, _ := json.Marshal(workspace)
+	override := `projects={ ` + string(quoted) + ` = { trust_level = "trusted" } }`
+	for _, call := range []map[string]any{firstCall, callsFor(env, "t_1", 1)[0]} {
+		args := toStrings(call["args"])
+		if call["cwd"] != workspace || !strings.Contains(workspace, "/.local/") || !slices.Contains(args, override) {
+			t.Fatalf("launch scope: cwd=%v args=%v, want %s", call["cwd"], args, override)
+		}
+	}
 	args := toStrings(callsFor(env, "t_1", 1)[0]["args"])
 	if !slices.Contains(args, "resume") || !strings.HasPrefix(args[len(args)-2], "codex-t_1-") {
 		t.Fatalf("resume args: %v", args)
+	}
+	if _, err := os.Stat(filepath.Join(env.Home, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("Codex config changed: %v", err)
 	}
 
 	env.Vars["SHEPHRD_RUN_TOKEN"] = token
