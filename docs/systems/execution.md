@@ -149,6 +149,8 @@ Reconciliation never starts a run, chooses resume or retry, or invents authority
 
 The task's target names the harness and an opaque model string. Execution passes the model to the harness unchanged and never translates it. A model is never carried across a harness change. Resume keeps the attempt's harness and model. Retry uses the task's current target, which the owner may change.
 
+The built-in Codex harness supplies an invocation-only `-c` override on both new and resumed runs: an inline TOML `projects` table whose sole entry sets `trust_level = "trusted"` for the exact absolute attempt workspace. Its path is a quoted TOML key, not a dotted `-c` path, so periods in worktree paths remain part of the key. The override does not write persistent Codex configuration, trust the registered checkout or other worktrees on Shephrd's behalf, or change sandbox and approval options. Codex may load project-local configuration, hooks and exec policies for that trusted worktree. Folder trust is not Shephrd lifecycle authority: reporting, acceptance, landing and release remain separate decisions.
+
 ## Commands
 
 | Command | Effect |

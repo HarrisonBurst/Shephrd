@@ -99,7 +99,10 @@ func codex(r HarnessRequest) HarnessCommand {
 	args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 	if r.Interactive {
 		args = append(args, "-c", `sandbox_mode="danger-full-access"`)
-	} else {
+	}
+	workspace, _ := json.Marshal(r.Workspace)
+	args = append(args, "-c", `projects={ `+string(workspace)+` = { trust_level = "trusted" } }`)
+	if !r.Interactive {
 		args = append(args, "--json")
 	}
 	if r.Mode == "resume" {
