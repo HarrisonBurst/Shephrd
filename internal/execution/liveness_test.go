@@ -18,6 +18,8 @@ type livenessHost struct {
 	probe        string
 	presentation string
 	exit         ExitResponse
+	exitErr      bool
+	onExit       func()
 	calls        []string
 }
 
@@ -32,6 +34,12 @@ func (h *livenessHost) Call(_ context.Context, op string, _, resp any) error {
 		}
 		resp.(*StateResponse).State = h.probe
 	case "exit_record":
+		if h.exitErr {
+			return errors.New("host unreachable")
+		}
+		if h.onExit != nil {
+			h.onExit()
+		}
 		*resp.(*ExitResponse) = h.exit
 	case "presentation":
 		resp.(*PresentationResponse).State = h.presentation
@@ -309,6 +317,118 @@ func TestAbandonRefusesUnprovenPresentationStarts(t *testing.T) {
 			current, err := coord.LoadRun(db, run.ID)
 			if err != nil || current.Liveness != "unknown" || current.ExitStatus != nil || current.StopReason != "" {
 				t.Fatalf("run after refusal: %+v, %v", current, err)
+			}
+		})
+	}
+}
+
+func TestAbandonWithHostNoDispatchProof(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+		proof    bool
+		change   func(*NoDispatchProof)
+		mutate   func(*testing.T, *store.Store, *coord.Task, *coord.Run)
+		found    bool
+		present  bool
+		pid      bool
+		live     bool
+		unheld   bool
+		running  bool
+		hostErr  bool
+		want     string
+	}{
+		{name: "matching proof", proof: true, present: true},
+		{name: "missing proof", present: true, want: "abandon_unconfirmed"},
+		{name: "wrong task", proof: true, present: true, change: func(p *NoDispatchProof) { p.Task++ }, want: "abandon_unconfirmed"},
+		{name: "stale attempt", proof: true, present: true, change: func(p *NoDispatchProof) { p.Attempt++ }, want: "abandon_unconfirmed"},
+		{name: "stale run", proof: true, present: true, change: func(p *NoDispatchProof) { p.Run++ }, want: "abandon_unconfirmed"},
+		{name: "stale generation", proof: true, present: true, change: func(p *NoDispatchProof) { p.Generation++ }, want: "abandon_unconfirmed"},
+		{name: "wrong host", proof: true, present: true, change: func(p *NoDispatchProof) { p.Host = "other" }, want: "abandon_unconfirmed"},
+		{name: "wrong directory", proof: true, present: true, change: func(p *NoDispatchProof) { p.Dir = "other" }, want: "abandon_unconfirmed"},
+		{name: "endpoint cannot be bypassed", proof: true, present: true, endpoint: "ep", want: "abandon_unconfirmed"},
+		{name: "exit record", proof: true, present: true, found: true, want: "abandon_unconfirmed"},
+		{name: "run directory missing", proof: true, want: "abandon_unconfirmed"},
+		{name: "host unreachable", proof: true, present: true, hostErr: true, want: "host error"},
+		{name: "process identity", proof: true, present: true, pid: true, want: "abandon_unconfirmed"},
+		{name: "run still starting", proof: true, present: true, live: true, want: "abandon_unconfirmed"},
+		{name: "workspace not held", proof: true, present: true, unheld: true, want: "abandon_unconfirmed"},
+		{name: "task not held", proof: true, present: true, running: true, want: "abandon_unconfirmed"},
+		{name: "concurrent current run cleared", proof: true, present: true, mutate: func(t *testing.T, db *store.Store, task *coord.Task, _ *coord.Run) {
+			if _, err := db.Exec(`UPDATE tasks SET run = NULL WHERE id = ?`, task.ID); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "abandon_stale"},
+		{name: "concurrent task change", proof: true, present: true, mutate: func(t *testing.T, db *store.Store, task *coord.Task, _ *coord.Run) {
+			if _, err := db.Exec(`UPDATE tasks SET state = 'running' WHERE id = ?`, task.ID); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "abandon_stale"},
+		{name: "concurrent run change", proof: true, present: true, mutate: func(t *testing.T, db *store.Store, _ *coord.Task, r *coord.Run) {
+			if _, err := db.Exec(`UPDATE runs SET endpoint = 'new' WHERE id = ?`, r.ID); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "abandon_stale"},
+		{name: "concurrent workspace change", proof: true, present: true, mutate: func(t *testing.T, db *store.Store, task *coord.Task, _ *coord.Run) {
+			if _, err := db.Exec(`UPDATE attempts SET workspace_state = 'unknown' WHERE task = ? AND n = ?`, task.ID, task.Attempt); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "abandon_stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host := &livenessHost{exit: ExitResponse{Present: tc.present, Found: tc.found, Endpoint: tc.endpoint}, presentation: "present", exitErr: tc.hostErr}
+			db, x, task, run := livenessFixture(t, host, tc.pid, "running")
+			if !tc.live {
+				if _, err := db.Exec(`UPDATE runs SET liveness = 'unknown' WHERE id = ?`, run.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !tc.running {
+				if _, err := db.Exec(`UPDATE tasks SET state = 'held', reason = 'start_failed' WHERE id = ?`, task.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.unheld {
+				if _, err := db.Exec(`UPDATE attempts SET workspace_state = 'unknown' WHERE task = ? AND n = ?`, task.ID, task.Attempt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			proof := NoDispatchProof{Task: task.ID, Attempt: task.Attempt, Run: run.ID, Generation: run.Generation, Host: run.Host, Dir: run.Dir}
+			if tc.change != nil {
+				tc.change(&proof)
+			}
+			if tc.proof {
+				host.exit.NoDispatch = &proof
+			}
+			if tc.mutate != nil {
+				host.onExit = func() { tc.mutate(t, db, task, run) }
+			}
+			_, err := x.Abandon(context.Background(), task)
+			if tc.want == "host error" {
+				if err == nil {
+					t.Fatal("unreachable host accepted")
+				}
+			} else if tc.want != "" {
+				if fault.As(err).Kind != tc.want {
+					t.Fatalf("abandon: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("abandon: %v", err)
+			}
+			current, err := coord.LoadRun(db, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if current.Liveness != "exited" || current.StopReason != "abandoned" || current.Endpoint != "" {
+					t.Fatalf("run: %+v", current)
+				}
+				currentTask, err := coord.Load(db, task.ID)
+				if err != nil || currentTask.State != "held" {
+					t.Fatalf("task: %+v, %v", currentTask, err)
+				}
+			} else if current.Liveness == "exited" || current.StopReason != "" || current.ExitStatus != nil {
+				t.Fatalf("unproven run exited: %+v", current)
 			}
 		})
 	}

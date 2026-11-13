@@ -35,11 +35,12 @@ type (
 		ReadOnly bool   `json:"read_only"`
 	}
 	LaunchRequest struct {
-		RunDir string  `json:"run_dir"`
-		Brief  string  `json:"brief"`
-		Spec   RunSpec `json:"spec"`
-		Token  string  `json:"token"`
-		Title  string  `json:"title,omitempty"`
+		RunDir string          `json:"run_dir"`
+		Proof  NoDispatchProof `json:"proof"`
+		Brief  string          `json:"brief"`
+		Spec   RunSpec         `json:"spec"`
+		Token  string          `json:"token"`
+		Title  string          `json:"title,omitempty"`
 	}
 	RunDirRequest struct {
 		RunDir string `json:"run_dir"`
@@ -50,10 +51,11 @@ type (
 		Truncated bool   `json:"truncated"`
 	}
 	ExitResponse struct {
-		Record   ExitRecord `json:"record"`
-		Found    bool       `json:"found"`
-		Present  bool       `json:"present"`
-		Endpoint string     `json:"endpoint,omitempty"`
+		Record     ExitRecord       `json:"record"`
+		Found      bool             `json:"found"`
+		Present    bool             `json:"present"`
+		Endpoint   string           `json:"endpoint,omitempty"`
+		NoDispatch *NoDispatchProof `json:"no_dispatch,omitempty"`
 	}
 	StopRequest struct {
 		PGID  int    `json:"pgid"`
@@ -260,7 +262,7 @@ func handle(ctx context.Context, env HostEnv, op string, body []byte) (any, erro
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
-		return ExitResponse{Record: record, Found: found, Present: presentErr == nil, Endpoint: string(endpoint)}, nil
+		return ExitResponse{Record: record, Found: found, Present: presentErr == nil, Endpoint: string(endpoint), NoDispatch: readNoDispatch(req.RunDir)}, nil
 	case "read_log":
 		req, err := decode[RunDirRequest](body)
 		if err != nil {

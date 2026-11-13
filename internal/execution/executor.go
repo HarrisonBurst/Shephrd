@@ -276,7 +276,7 @@ func (x *Executor) launch(ctx context.Context, host Host, t *coord.Task, a *coor
 	}
 	var launched LaunchResponse
 	err = host.Call(ctx, "launch", LaunchRequest{
-		RunDir: run.Dir, Brief: brief, Token: token, Title: label,
+		RunDir: run.Dir, Proof: NoDispatchProof{Task: t.ID, Attempt: a.N, Run: run.ID, Generation: run.Generation, Host: run.Host, Dir: run.Dir}, Brief: brief, Token: token, Title: label,
 		Spec: RunSpec{Command: command.Command, Env: command.Env, Workspace: a.Workspace, Harness: a.Harness, Interactive: interactive, Label: label},
 	}, &launched)
 	if err != nil {
@@ -664,12 +664,19 @@ func (x *Executor) Abandon(ctx context.Context, t *coord.Task) (*coord.Run, erro
 	if endpoint == "" {
 		endpoint = exit.Endpoint
 	}
-	if endpoint == "" || (exit.Endpoint != "" && exit.Endpoint != endpoint) {
-		return r, fault.New("abandon_unconfirmed", "%s presentation endpoint is not proven", t.Ref).WithNext("workspace", "reconcile")
-	}
-	var shown PresentationResponse
-	if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: endpoint}, &shown); err != nil || shown.State != "absent" {
-		return r, fault.New("abandon_unconfirmed", "%s presentation endpoint is not proven absent", t.Ref).WithNext("workspace", "reconcile")
+	if endpoint == "" && exit.Endpoint == "" && exit.NoDispatch != nil {
+		want := NoDispatchProof{Task: t.ID, Attempt: attempt.N, Run: r.ID, Generation: r.Generation, Host: r.Host, Dir: r.Dir}
+		if *exit.NoDispatch != want {
+			return r, fault.New("abandon_unconfirmed", "%s no-dispatch evidence does not match the current run", t.Ref).WithNext("workspace", "reconcile")
+		}
+	} else {
+		if endpoint == "" || (exit.Endpoint != "" && exit.Endpoint != endpoint) {
+			return r, fault.New("abandon_unconfirmed", "%s presentation endpoint is not proven", t.Ref).WithNext("workspace", "reconcile")
+		}
+		var shown PresentationResponse
+		if err := host.Call(ctx, "presentation", PresentationRequest{Operation: "probe", Endpoint: endpoint}, &shown); err != nil || shown.State != "absent" {
+			return r, fault.New("abandon_unconfirmed", "%s presentation endpoint is not proven absent", t.Ref).WithNext("workspace", "reconcile")
+		}
 	}
 	err = x.write(ctx, func(tx *store.Tx) error {
 		currentTask, err := coord.Load(tx, t.ID)
@@ -677,17 +684,20 @@ func (x *Executor) Abandon(ctx context.Context, t *coord.Task) (*coord.Run, erro
 			return err
 		}
 		current, err := coord.CurrentRun(tx, currentTask)
-		if err != nil || current == nil {
+		if err != nil {
 			return err
 		}
-		if current.ID != r.ID || currentTask.State != "held" || current.Liveness != "unknown" || current.PID != 0 || current.Endpoint != r.Endpoint {
+		if current == nil {
+			return fault.New("abandon_stale", "%s run changed while it was being checked", t.Ref)
+		}
+		if current.ID != r.ID || currentTask.Attempt != t.Attempt || currentTask.State != "held" || current.Liveness != "unknown" || current.PID != 0 || current.Endpoint != r.Endpoint || current.Attempt != r.Attempt || current.Generation != r.Generation || current.Dir != r.Dir || current.Host != r.Host {
 			return fault.New("abandon_stale", "%s run changed while it was being checked", t.Ref)
 		}
 		currentAttempt, err := coord.LoadAttempt(tx, currentTask.ID, currentTask.Attempt)
 		if err != nil {
 			return err
 		}
-		if currentAttempt.WorkspaceState != "held" {
+		if currentAttempt.N != attempt.N || currentAttempt.WorkspaceState != "held" || currentAttempt.Workspace != attempt.Workspace || currentAttempt.Host != attempt.Host {
 			return fault.New("abandon_stale", "%s workspace changed while it was being checked", t.Ref)
 		}
 		if _, err := tx.Exec(`UPDATE runs SET stop_reason = 'abandoned', endpoint = ? WHERE id = ?`, endpoint, current.ID); err != nil {
