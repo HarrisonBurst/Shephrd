@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,6 +92,136 @@ func ageRun(t *testing.T, env *testkit.Env, run map[string]any) {
 	}
 }
 
+func TestConcurrentColdHerdrOpenFailures(t *testing.T) {
+	env := withHerdr(t)
+	bin := filepath.Join(env.Home, "herdrbin")
+	if err := os.Rename(filepath.Join(bin, "herdr"), filepath.Join(bin, "fakeherdr")); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := `#!/bin/sh
+if [ "$1 $2" = "tab create" ]; then
+  for token in "$HOME"/.local/share/shephrd/runs/*/1/token; do
+    [ -f "$token" ] && cp "$token" "$HOME/.fakeherdr/token-$$"
+  done
+  touch "$HOME/.fakeherdr/cold-$$"
+  n=0
+  while [ "$(find "$HOME/.fakeherdr" -name 'cold-*' | wc -l | tr -d ' ')" -lt 2 ]; do
+    sleep 0.05
+    n=$((n+1))
+    [ "$n" -lt 200 ] || exit 2
+  done
+  echo '{"error":{"code":"not_ready","message":"terminal backend still starting"}}'
+  exit 1
+fi
+exec "$(dirname "$0")/fakeherdr" "$@"
+`
+	if err := os.MkdirAll(filepath.Join(env.Home, ".fakeherdr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "herdr"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		env.OK("task", "create", "--repo", "api", "--objective", "Work")
+	}
+	var wg sync.WaitGroup
+	results := make([]testkit.Result, 2)
+	for i := range results {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = env.Run("", "task", "start", "t_"+strconv.Itoa(i+1))
+		}()
+	}
+	wg.Wait()
+	for i, result := range results {
+		ref := "t_" + string(rune('1'+i))
+		result.Refusal(t, "start_failed")
+		run := env.OK("task", "log", ref)["run"].(map[string]any)
+		if run["liveness"] != "starting" || run["pid"] != nil || run["endpoint"] != nil {
+			t.Fatalf("failed open %s: %v", ref, run)
+		}
+		dir := filepath.Join(env.Home, ".local", "share", "shephrd", "runs", ref, "1")
+		for _, name := range []string{"brief.md", "run.json", "run-not-dispatched.json"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+				t.Fatalf("%s %s: %v", ref, name, err)
+			}
+		}
+		for _, name := range []string{"endpoint", "token", "session.log", "exit.json"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+				t.Fatalf("%s %s: %v", ref, name, err)
+			}
+		}
+		ageRun(t, env, run)
+	}
+	env.OK("workspace", "reconcile")
+	for i := range results {
+		ref := "t_" + string(rune('1'+i))
+		if task := env.Task(ref); task["state"] != "held" || task["reason"] != "start_failed" {
+			t.Fatalf("task %s: %v", ref, task)
+		}
+		if run := env.OK("task", "log", ref)["run"].(map[string]any); run["liveness"] != "unknown" {
+			t.Fatalf("run %s: %v", ref, run)
+		}
+		env.Refused("liveness_unknown", "task", "retry", ref)
+		env.Refused("stop_unconfirmed", "task", "stop", ref)
+	}
+	if panes := herdrPanes(env); len(panes) != 0 || len(env.Calls()) != 0 {
+		t.Fatalf("unexpected launches: panes %v calls %v", panes, env.Calls())
+	}
+	if matches, err := filepath.Glob(filepath.Join(env.Home, ".fakeherdr", "cold-*")); err != nil || len(matches) != 2 {
+		t.Fatalf("concurrent cold opens: %v, %v", matches, err)
+	}
+	if err := os.Remove(filepath.Join(bin, "herdr")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(bin, "fakeherdr"), filepath.Join(bin, "herdr")); err != nil {
+		t.Fatal(err)
+	}
+	env.OK("task", "create", "--repo", "api", "--objective", "Ready")
+	env.OK("task", "start", "t_3")
+	env.WaitState("t_3", "done")
+	for i := range results {
+		ref := "t_" + string(rune('1'+i))
+		if run := env.OK("task", "log", ref)["run"].(map[string]any); run["liveness"] != "unknown" {
+			t.Fatalf("healthy start changed %s: %v", ref, run)
+		}
+		proofPath := filepath.Join(env.Home, ".local", "share", "shephrd", "runs", ref, "1", "run-not-dispatched.json")
+		proof, err := os.ReadFile(proofPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(proofPath, []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env.Refused("abandon_unconfirmed", "task", "stop", ref, "--abandon")
+		if err := os.WriteFile(proofPath, proof, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env.OK("task", "stop", ref, "--abandon")
+		if run := env.OK("task", "log", ref)["run"].(map[string]any); run["liveness"] != "exited" || run["stop_reason"] != "abandoned" {
+			t.Fatalf("abandoned %s: %v", ref, run)
+		}
+		if task := env.Task(ref); task["state"] != "held" {
+			t.Fatalf("abandoned task %s: %v", ref, task)
+		}
+	}
+	tokens, err := filepath.Glob(filepath.Join(env.Home, ".fakeherdr", "token-*"))
+	if err != nil || len(tokens) == 0 {
+		t.Fatalf("no intercepted run token: %v, %v", tokens, err)
+	}
+	body, err := os.ReadFile(tokens[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.Vars["SHEPHRD_RUN_TOKEN"] = strings.TrimSpace(string(body))
+	env.Refused("stale_run", "_started", "--pid", "123", "--start", "old")
+	delete(env.Vars, "SHEPHRD_RUN_TOKEN")
+	if len(callsFor(env, "t_1", 0)) != 0 || len(callsFor(env, "t_2", 0)) != 0 {
+		t.Fatalf("abandoned run launched a harness: %v", env.Calls())
+	}
+}
+
 func TestInterruptedPresentationBeforeSupervisorIdentity(t *testing.T) {
 	env := withHerdr(t)
 	dir := filepath.Join(env.Home, ".fakeherdr")
@@ -138,12 +270,111 @@ func TestInterruptedPresentationBeforeSupervisorIdentity(t *testing.T) {
 	}
 	env.Refused("liveness_unknown", "task", "resume", "t_1")
 	env.Refused("liveness_unknown", "task", "retry", "t_1")
+	if _, err := os.Stat(filepath.Join(env.Home, ".local", "share", "shephrd", "runs", "t_1", "1", "run-not-dispatched.json")); !os.IsNotExist(err) {
+		t.Fatalf("dispatch was attempted: %v", err)
+	}
 	env.OK("task", "stop", "t_1", "--abandon")
 	if current := env.OK("task", "log", "t_1")["run"].(map[string]any); current["liveness"] != "exited" || current["stop_reason"] != "abandoned" {
 		t.Fatalf("abandoned run: %v", current)
 	}
 	if task := env.Task("t_1"); task["state"] != "held" {
 		t.Fatalf("abandoned task: %v", task)
+	}
+}
+
+func TestFailedProofRecordingKeepsRunUnknown(t *testing.T) {
+	env := withHerdr(t)
+	bin := filepath.Join(env.Home, "herdrbin")
+	if err := os.Rename(filepath.Join(bin, "herdr"), filepath.Join(bin, "fakeherdr")); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := `#!/bin/sh
+if [ "$1 $2" = "tab create" ]; then
+  rm "$HOME/.local/share/shephrd/runs/t_1/1/token"
+  echo '{"error":{"code":"not_ready","message":"terminal backend still starting"}}'
+  exit 1
+fi
+exec "$(dirname "$0")/fakeherdr" "$@"
+`
+	if err := os.WriteFile(filepath.Join(bin, "herdr"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env.OK("task", "create", "--repo", "api", "--objective", "Work")
+	env.Refused("start_failed", "task", "start", "t_1")
+	run := env.OK("task", "log", "t_1")["run"].(map[string]any)
+	if _, err := os.Stat(filepath.Join(run["dir"].(string), "run-not-dispatched.json")); !os.IsNotExist(err) {
+		t.Fatalf("proof after failed recording: %v", err)
+	}
+	ageRun(t, env, run)
+	env.OK("workspace", "reconcile")
+	env.Refused("abandon_unconfirmed", "task", "stop", "t_1", "--abandon")
+}
+
+func TestFailedPaneRunHasNoNoDispatchProof(t *testing.T) {
+	env := withHerdr(t)
+	bin := filepath.Join(env.Home, "herdrbin")
+	if err := os.Rename(filepath.Join(bin, "herdr"), filepath.Join(bin, "fakeherdr")); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := `#!/bin/sh
+if [ "$1 $2" = "pane run" ]; then
+  echo '{"error":{"code":"not_ready","message":"terminal backend still starting"}}'
+  exit 1
+fi
+exec "$(dirname "$0")/fakeherdr" "$@"
+`
+	if err := os.WriteFile(filepath.Join(bin, "herdr"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env.OK("task", "create", "--repo", "api", "--objective", "Work")
+	env.Refused("start_failed", "task", "start", "t_1")
+	run := env.OK("task", "log", "t_1")["run"].(map[string]any)
+	if _, err := os.Stat(filepath.Join(run["dir"].(string), "run-not-dispatched.json")); !os.IsNotExist(err) {
+		t.Fatalf("proof after run dispatch: %v", err)
+	}
+	if panes := herdrPanes(env); len(panes) != 1 || len(env.Calls()) != 0 {
+		t.Fatalf("unexpected pane or harness: %v, %v", panes, env.Calls())
+	}
+	ageRun(t, env, run)
+	env.OK("workspace", "reconcile")
+	env.Refused("abandon_unconfirmed", "task", "stop", "t_1", "--abandon")
+}
+
+func TestLostHostReplyAfterNoDispatchProof(t *testing.T) {
+	m := threeMachines(t)
+	m.laptop.InstallHarnesses()
+	installHerdr(t, m.laptop)
+	m.home.Path = append([]string{filepath.Join(m.laptop.Home, "herdrbin")}, m.home.Path...)
+	bin := filepath.Join(m.laptop.Home, "herdrbin")
+	if err := os.Rename(filepath.Join(bin, "herdr"), filepath.Join(bin, "fakeherdr")); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := `#!/bin/sh
+if [ "$1 $2" = "tab create" ]; then
+  echo '{"error":{"code":"not_ready","message":"terminal backend still starting"}}'
+  exit 1
+fi
+exec "$(dirname "$0")/fakeherdr" "$@"
+`
+	if err := os.WriteFile(filepath.Join(bin, "herdr"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m.home.OK("repo", "add", testkit.GitRepo(t, "api"), "--host", "laptop")
+	m.home.OK("task", "create", "--repo", "api", "--objective", "Work")
+	m.home.SSHDropOperation("me@laptop", "launch")
+	m.home.Refused("start_failed", "task", "start", "t_1")
+	run := m.home.OK("task", "log", "t_1")["run"].(map[string]any)
+	if run["pid"] != nil || run["endpoint"] != nil {
+		t.Fatalf("failed remote open: %v", run)
+	}
+	if _, err := os.Stat(filepath.Join(run["dir"].(string), "run-not-dispatched.json")); err != nil {
+		t.Fatal(err)
+	}
+	ageRun(t, m.home, run)
+	m.home.OK("workspace", "reconcile")
+	m.home.OK("task", "stop", "t_1", "--abandon")
+	if current := m.home.OK("task", "log", "t_1")["run"].(map[string]any); current["liveness"] != "exited" || current["stop_reason"] != "abandoned" {
+		t.Fatalf("abandoned remote run: %v", current)
 	}
 }
 

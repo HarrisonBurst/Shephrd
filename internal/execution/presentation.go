@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,15 @@ import (
 	"shephrd/internal/fault"
 	"shephrd/internal/plugin"
 )
+
+type NoDispatchProof struct {
+	Task       int64  `json:"task"`
+	Attempt    int64  `json:"attempt"`
+	Run        int64  `json:"run"`
+	Generation int64  `json:"generation"`
+	Host       string `json:"host"`
+	Dir        string `json:"dir"`
+}
 
 type LaunchResponse struct {
 	PID      int    `json:"pid,omitempty"`
@@ -33,13 +43,69 @@ type PresentationResponse struct {
 	State    string `json:"state,omitempty"`
 }
 
-func tokenPath(runDir string) string    { return filepath.Join(runDir, "token") }
-func endpointPath(runDir string) string { return filepath.Join(runDir, "endpoint") }
+func tokenPath(runDir string) string      { return filepath.Join(runDir, "token") }
+func endpointPath(runDir string) string   { return filepath.Join(runDir, "endpoint") }
+func noDispatchPath(runDir string) string { return filepath.Join(runDir, "run-not-dispatched.json") }
+
+func writeNoDispatch(runDir string, proof NoDispatchProof) error {
+	body, err := json.Marshal(proof)
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(runDir, ".run-not-dispatched-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		return err
+	}
+	if _, err := file.Write(body); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(file.Name(), noDispatchPath(runDir)); err != nil {
+		return err
+	}
+	dir, err := os.Open(runDir)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	if err := dir.Sync(); err != nil {
+		os.Remove(noDispatchPath(runDir))
+		return err
+	}
+	return nil
+}
+
+func readNoDispatch(runDir string) *NoDispatchProof {
+	body, err := os.ReadFile(noDispatchPath(runDir))
+	if err != nil {
+		return nil
+	}
+	var proof NoDispatchProof
+	if json.Unmarshal(body, &proof) != nil {
+		return nil
+	}
+	return &proof
+}
 
 // present starts the supervisor inside a terminal from the host's
 // presentation provider. The run token waits in a private file the
 // supervisor removes, so it never appears in a command line or a screen.
 func present(ctx context.Context, env HostEnv, req LaunchRequest) (string, error) {
+	if err := os.Remove(noDispatchPath(req.RunDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
 	body, err := json.Marshal(req.Spec)
 	if err != nil {
 		return "", err
@@ -53,7 +119,12 @@ func present(ctx context.Context, env HostEnv, req LaunchRequest) (string, error
 	command := "clear; exec " + shellQuote(env.Self) + " _run " + shellQuote(req.RunDir)
 	resp, err := presentation(ctx, env, PresentationRequest{Operation: "open", Title: req.Title, Workspace: req.Spec.Workspace})
 	if err != nil {
-		os.Remove(tokenPath(req.RunDir))
+		if removeErr := os.Remove(tokenPath(req.RunDir)); removeErr != nil {
+			return "", fmt.Errorf("%w: revoke run token: %v", err, removeErr)
+		}
+		if proofErr := writeNoDispatch(req.RunDir, req.Proof); proofErr != nil {
+			return "", fmt.Errorf("%w: record no-dispatch evidence: %v", err, proofErr)
+		}
 		return "", err
 	}
 	if err := os.WriteFile(endpointPath(req.RunDir), []byte(resp.Endpoint), 0o600); err != nil {
