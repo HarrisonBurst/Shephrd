@@ -45,6 +45,10 @@ export function createShephrdInbox(deps: Dependencies = { spawn, shephrd: "sheph
     const queue: Item[] = [];
     const seen = new Set<number>();
 
+    const marked = (ctx: ExtensionContext) => ctx.sessionManager.getBranch().some(entry =>
+      entry.type === "custom" && entry.customType === "shephrd-inbox-watch" &&
+      (entry.data as { sessionId?: string } | undefined)?.sessionId === ctx.sessionManager.getSessionId());
+
     const stopWatch = () => {
       stopped = true;
       session++;
@@ -101,9 +105,24 @@ export function createShephrdInbox(deps: Dependencies = { spawn, shephrd: "sheph
       });
     };
 
+    if (!deps.env.SHEPHRD_RUN_TOKEN) pi.registerTool({
+      name: "shephrd_inbox_watch",
+      label: "Watch Shephrd inbox",
+      description: "Opt this Pi main-driver session into Shephrd inbox follow-up turns.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+        if (ctx.mode !== "tui" || deps.env.SHEPHRD_RUN_TOKEN) return { content: [{ type: "text", text: "Shephrd inbox watch is unavailable in this session." }] };
+        if (!stopped) return { content: [{ type: "text", text: "Shephrd inbox watch is already active." }] };
+        if (!marked(ctx)) pi.appendEntry("shephrd-inbox-watch", { sessionId: ctx.sessionManager.getSessionId() });
+        stopped = false;
+        watch(ctx);
+        return { content: [{ type: "text", text: "Shephrd inbox watch is active for this session." }] };
+      },
+    });
+
     pi.on("session_start", async (_event, ctx) => {
       stopWatch();
-      if (ctx.mode !== "tui" || deps.env.SHEPHRD_RUN_TOKEN) return;
+      if (ctx.mode !== "tui" || deps.env.SHEPHRD_RUN_TOKEN || !marked(ctx)) return;
       stopped = false;
       watch(ctx);
     });
