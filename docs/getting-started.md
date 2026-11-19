@@ -84,7 +84,7 @@ url = "https://example.internal/shephrd"
 secret_file = "/run/secrets/shephrd-webhook"   # mode 0600
 ```
 
-Webhook deliveries are signed in the Standard Webhooks style and remain compatible with plugins; they never ack. A main driver in Pi can use the [Pi inbox extension](#plugins), which holds `shephrd inbox wait` and sends real items into follow-up turns for explicit handling and acknowledgement. Codex can use the generic inbox/watch commands; first-party turn delivery for Codex is not included.
+Webhook deliveries are signed in the Standard Webhooks style and remain compatible with plugins; they never ack. A main driver in Pi can install the [Pi inbox extension](#plugins) and call `shephrd_inbox_watch` once from the main-driver skill to opt that session into `shephrd inbox wait` and real-item follow-up turns. A new unmarked session remains unwatched. Codex can use the generic inbox/watch commands; first-party turn delivery for Codex is not included.
 
 ## Three machines
 
